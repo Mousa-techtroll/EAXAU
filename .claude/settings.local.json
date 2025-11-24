@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(/c/Program Files/MetaTrader 5/metaeditor64.exe:*)",
+      "Bash(awk:*)",
+      "Bash(\"/c/Program Files/MetaTrader 5/metaeditor64.exe\" /compile:Stack17_Main.mq5 /log)",
+      "Bash(\"/c/Program Files/Vantage International MT5/MetaEditor64.exe\" /compile:Stack17_Main.mq5 /log)",
+      "Bash(\"C:\\Program Files\\Vantage International MT5\\MetaEditor64.exe\" /compile:\"C:\\newTrader8\\Stack17_Main.mq5\" /log)",
+      "Bash(\"C:\\Program Files\\Vantage International MT5\\MetaEditor64.exe\" /compile:\"C:\\newTrader8\\Include\\Core\\PositionCoordinator.mqh\" /log)",
+      "Bash(\"C:\\Program Files\\Vantage International MT5\\MetaEditor64.exe\" /compile:Stack17_Main.mq5 /log)",
+      "Bash(\"C:\\Program Files\\Vantage International MT5\\MetaEditor64.exe\" /compile:\"C:\\newTrader8\\test_position_coordinator.mq5\" /log)",
+      "Bash(tree:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
