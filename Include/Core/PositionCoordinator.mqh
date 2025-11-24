@@ -10,6 +10,7 @@
 #include "../Management/PositionManager.mqh"
 #include "../Management/TradeExecutor.mqh"
 #include "../Management/RiskManager.mqh"
+#include "../Management/DynamicPositionSizer.mqh"
 #include "../Components/RegimeClassifier.mqh"
 #include "../Components/MacroBias.mqh"
 #include "../Common/TradeLogger.mqh"
@@ -23,6 +24,7 @@ private:
    CPositionManager*    m_position_manager;
    CTradeExecutor*      m_trade_executor;
    CRiskManager*        m_risk_manager;
+   CDynamicPositionSizer* m_dynamic_sizer;
    CRegimeClassifier*   m_regime_classifier;
    CMacroBias*          m_macro_bias;
    CTradeLogger*        m_trade_logger;
@@ -33,6 +35,7 @@ private:
 
    bool                 m_close_before_weekend;
    int                  m_weekend_close_hour;
+   bool                 m_use_dynamic_sizing;
 
 public:
    //+------------------------------------------------------------------+
@@ -41,17 +44,20 @@ public:
    CPositionCoordinator(CPositionManager* pos_mgr, CTradeExecutor* executor,
                         CRiskManager* risk_mgr, CRegimeClassifier* regime,
                         CMacroBias* macro, CTradeLogger* logger,
-                        int magic_number, bool close_weekend, int weekend_hour)
+                        int magic_number, bool close_weekend, int weekend_hour,
+                        CDynamicPositionSizer* dynamic_sizer = NULL, bool use_dynamic_sizing = false)
    {
       m_position_manager = pos_mgr;
       m_trade_executor = executor;
       m_risk_manager = risk_mgr;
+      m_dynamic_sizer = dynamic_sizer;
       m_regime_classifier = regime;
       m_macro_bias = macro;
       m_trade_logger = logger;
       m_magic_number = magic_number;
       m_close_before_weekend = close_weekend;
       m_weekend_close_hour = weekend_hour;
+      m_use_dynamic_sizing = use_dynamic_sizing;
 
       m_position_count = 0;
       ArrayResize(m_positions, 0);
@@ -211,6 +217,39 @@ public:
                m_trade_logger.LogTradeExit(m_positions[i], profit, exit_price);
 
             bool is_winner = (profit > 0);
+
+            // Record trade result for Dynamic Position Sizer
+            if (m_use_dynamic_sizing && m_dynamic_sizer != NULL)
+            {
+               // Calculate actual R:R achieved
+               double entry = m_positions[i].entry_price;
+               double sl = m_positions[i].stop_loss;
+               double risk_distance = MathAbs(entry - sl);
+               double profit_distance = MathAbs(exit_price - entry);
+               double actual_rr = (risk_distance > 0) ? profit_distance / risk_distance : 0;
+
+               // Get current regime for tracking
+               ENUM_REGIME_TYPE regime = m_regime_classifier.GetRegime();
+
+               // Calculate risk amount
+               double risk_amount = AccountInfoDouble(ACCOUNT_BALANCE) * (m_positions[i].initial_risk_pct / 100.0);
+
+               // Record the result
+               m_dynamic_sizer.RecordTradeResult(
+                  m_positions[i].pattern_type,
+                  m_positions[i].direction,
+                  regime,
+                  risk_amount,
+                  profit,
+                  actual_rr,
+                  is_winner
+               );
+
+               LogPrint("Trade Result Recorded for Dynamic Sizing: ",
+                        EnumToString(m_positions[i].pattern_type), " | ",
+                        is_winner ? "WIN" : "LOSS", " | R:R: ", DoubleToString(actual_rr, 2));
+            }
+
             m_risk_manager.RemovePosition(m_positions[i].ticket, is_winner);
 
             // Remove from array

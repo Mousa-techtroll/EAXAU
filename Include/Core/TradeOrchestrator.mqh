@@ -11,6 +11,7 @@
 #include "../Management/RiskManager.mqh"
 #include "../Management/SignalManager.mqh"
 #include "../Management/AdaptiveTPManager.mqh"
+#include "../Management/DynamicPositionSizer.mqh"
 #include "../Common/TradeLogger.mqh"
 #include "PositionCoordinator.mqh"
 #include "RiskMonitor.mqh"
@@ -27,10 +28,12 @@ private:
    CPositionCoordinator* m_position_coordinator;
    CRiskMonitor*        m_risk_monitor;
    CAdaptiveTPManager*  m_adaptive_tp_manager;
+   CDynamicPositionSizer* m_dynamic_sizer;
    CRegimeClassifier*   m_regime_classifier;
 
    int                  m_handle_ma_200;
    bool                 m_use_adaptive_tp;
+   bool                 m_use_dynamic_sizing;
 
    // Input parameters
    double               m_min_rr_ratio;
@@ -60,7 +63,8 @@ public:
                      double risk_aplus, double risk_a, double risk_bplus, double risk_b,
                      double short_risk_multiplier,
                      CAdaptiveTPManager* adaptive_tp = NULL, CRegimeClassifier* regime = NULL,
-                     bool use_adaptive_tp = false)
+                     bool use_adaptive_tp = false,
+                     CDynamicPositionSizer* dynamic_sizer = NULL, bool use_dynamic_sizing = false)
    {
       m_trade_executor = executor;
       m_risk_manager = risk_mgr;
@@ -68,11 +72,13 @@ public:
       m_position_coordinator = pos_coordinator;
       m_risk_monitor = risk_monitor;
       m_adaptive_tp_manager = adaptive_tp;
+      m_dynamic_sizer = dynamic_sizer;
       m_regime_classifier = regime;
       m_handle_ma_200 = handle_ma200;
       m_min_rr_ratio = min_rr;
       m_use_daily_200ema = use_200ema;
       m_use_adaptive_tp = use_adaptive_tp;
+      m_use_dynamic_sizing = use_dynamic_sizing;
       m_tp1_distance = tp1_dist;
       m_tp2_distance = tp2_dist;
       m_enable_alerts = alerts;
@@ -388,15 +394,42 @@ public:
 
       // Get risk percentage for this quality tier
       double base_risk = GetRiskForQuality(pending_signal.quality, pending_signal.pattern_name);
-      double adjusted_risk = m_risk_manager.AdjustRiskForStreak(base_risk);
+      double adjusted_risk = base_risk;
+
+      // === DYNAMIC POSITION SIZING ===
+      if(m_use_dynamic_sizing && m_dynamic_sizer != NULL && m_regime_classifier != NULL)
+      {
+         LogPrint("    Using DYNAMIC POSITION SIZING...");
+
+         // Get current regime
+         ENUM_REGIME_TYPE current_regime = m_regime_classifier.GetRegime();
+
+         // Calculate dynamic risk
+         adjusted_risk = m_dynamic_sizer.CalculateDynamicRisk(
+            base_risk,
+            pending_signal.pattern_type,
+            pending_signal.quality,
+            current_regime
+         );
+
+         LogPrint("    Dynamic Risk: ", DoubleToString(adjusted_risk, 2), "% (base: ", DoubleToString(base_risk, 2), "%)");
+      }
+      else
+      {
+         // Fallback to standard streak adjustment
+         adjusted_risk = m_risk_manager.AdjustRiskForStreak(base_risk);
+         LogPrint("    Using FIXED position sizing with streak adjustment");
+      }
+
+      // Apply short risk multiplier
       if (pending_signal.signal_type == SIGNAL_SHORT && m_short_risk_multiplier > 0)
       {
          adjusted_risk *= m_short_risk_multiplier;
          LogPrint("    Short risk bias applied: x", DoubleToString(m_short_risk_multiplier, 2),
-                  " => ", adjusted_risk, "%");
+                  " => ", DoubleToString(adjusted_risk, 2), "%");
       }
 
-      LogPrint("    Risk: ", base_risk, "% (adjusted: ", adjusted_risk, "%)");
+      LogPrint("    Final Risk: ", DoubleToString(adjusted_risk, 2), "%");
 
       // Calculate lot size based on CURRENT entry and SL
       double lot_size = m_risk_manager.CalculateLotSize(adjusted_risk, current_entry, pending_signal.stop_loss);
