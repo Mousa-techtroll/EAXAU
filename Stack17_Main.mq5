@@ -24,6 +24,7 @@
 #include "Include/Management/TradeExecutor.mqh"
 #include "Include/Management/PositionManager.mqh"
 #include "Include/Management/SignalManager.mqh"
+#include "Include/Management/AdaptiveTPManager.mqh"
 #include "Include/Filters/MarketFilters.mqh"
 
 // Include Core orchestration classes
@@ -93,11 +94,29 @@ input int InpRSIPeriod = 14;                          // RSI period for price ac
 input group "=== TRAILING STOP SETTINGS ==="
 input double InpATRMultiplierTrail = 2.0;             // ATR multiplier for trailing
 input double InpMinTrailMovement = 100.0;             // Min movement to modify SL (points)
-input double InpTP1Distance = 1.3;                    // TP1 distance (x risk)
-input double InpTP2Distance = 1.8;                    // TP2 distance (x risk)
+input double InpTP1Distance = 1.3;                    // TP1 distance (x risk) - fallback if adaptive disabled
+input double InpTP2Distance = 1.8;                    // TP2 distance (x risk) - fallback if adaptive disabled
 input double InpTP1Volume = 50.0;                     // TP1 volume % to close
 input double InpTP2Volume = 40.0;                     // TP2 volume % to close
 input double InpBreakevenOffset = 50.0;               // Breakeven offset (points, ~$0.50 for Gold)
+
+input group "=== ADAPTIVE TAKE PROFIT SYSTEM ==="
+input bool   InpEnableAdaptiveTP = true;              // Enable Adaptive TP System
+input double InpLowVolTP1Mult = 1.5;                  // Low Volatility: TP1 multiplier
+input double InpLowVolTP2Mult = 2.5;                  // Low Volatility: TP2 multiplier
+input double InpNormalVolTP1Mult = 2.0;               // Normal Volatility: TP1 multiplier
+input double InpNormalVolTP2Mult = 3.5;               // Normal Volatility: TP2 multiplier
+input double InpHighVolTP1Mult = 2.5;                 // High Volatility: TP1 multiplier
+input double InpHighVolTP2Mult = 5.0;                 // High Volatility: TP2 multiplier
+input double InpStrongTrendTPBoost = 1.3;             // Strong Trend: TP boost multiplier (ADX>35)
+input double InpWeakTrendTPCut = 0.8;                 // Weak Trend: TP reduction multiplier (ADX<20)
+input bool   InpUseStructureTargets = true;           // Use S/R levels for TP targets
+input double InpStructureTP1Pct = 0.75;               // Structure: TP1 at % of distance to level
+input double InpStructureTP2Pct = 1.0;                // Structure: TP2 at % of distance to level
+input double InpAdaptiveStrongADX = 35.0;             // ADX threshold for strong trend
+input double InpAdaptiveWeakADX = 20.0;               // ADX threshold for weak trend
+input double InpLowVolATRPct = 0.7;                   // ATR ratio for low volatility (<= this)
+input double InpHighVolATRPct = 1.3;                  // ATR ratio for high volatility (>= this)
 
 input group "=== MACRO BIAS ==="
 input string InpDXYSymbol = "USDX";                    // DXY symbol name
@@ -203,6 +222,7 @@ CPriceActionLowVol *         g_price_action_lowvol;
 CRiskManager *               g_risk_manager;
 CTradeExecutor *             g_trade_executor;
 CPositionManager *           g_position_manager;
+CAdaptiveTPManager *         g_adaptive_tp_manager;
 
 // New modular components
 CSignalValidator *           g_signal_validator;
@@ -247,6 +267,14 @@ int OnInit()
       LogPrint("ATR Period (unified): ", InpATRPeriod, " | SL Multiplier: ", InpATRMultiplierSL, "x | Min SL: ", InpMinSLPoints, " pts");
       LogPrint("Confirmation Candles: ", InpEnableConfirmation ? "ENABLED" : "DISABLED", " (Strictness: ", InpConfirmationStrictness, ")");
       LogPrint("TP Management: TP1=", InpTP1Volume, "% at ", InpTP1Distance, "x | TP2=", InpTP2Volume, "% at ", InpTP2Distance, "x");
+      LogPrint("Adaptive TP System: ", InpEnableAdaptiveTP ? "ENABLED" : "DISABLED");
+      if (InpEnableAdaptiveTP)
+      {
+            LogPrint("  Low Vol TPs: ", InpLowVolTP1Mult, "x / ", InpLowVolTP2Mult, "x");
+            LogPrint("  Normal Vol TPs: ", InpNormalVolTP1Mult, "x / ", InpNormalVolTP2Mult, "x");
+            LogPrint("  High Vol TPs: ", InpHighVolTP1Mult, "x / ", InpHighVolTP2Mult, "x");
+            LogPrint("  Structure Targets: ", InpUseStructureTargets ? "ON" : "OFF");
+      }
       if (InpEnableHybridLogic) // Simplified check
       {
             LogPrint("Filters: HYBRID SESSION LOGIC ENABLED");
@@ -295,6 +323,21 @@ int OnInit()
                                                 InpMinTrailMovement, InpAutoCloseOnChoppy, InpMaxPositionAgeHours,
                                                 InpTP1Volume, InpTP2Volume, InpBreakevenOffset);
 
+      // Create Adaptive TP Manager
+      g_adaptive_tp_manager = new CAdaptiveTPManager(InpTP1Distance, InpTP2Distance);
+      if(InpEnableAdaptiveTP)
+      {
+            g_adaptive_tp_manager.Configure(
+                  InpLowVolTP1Mult, InpLowVolTP2Mult,
+                  InpNormalVolTP1Mult, InpNormalVolTP2Mult,
+                  InpHighVolTP1Mult, InpHighVolTP2Mult,
+                  InpStrongTrendTPBoost, InpWeakTrendTPCut,
+                  InpUseStructureTargets, InpStructureTP1Pct, InpStructureTP2Pct,
+                  InpAdaptiveStrongADX, InpAdaptiveWeakADX,
+                  InpLowVolATRPct, InpHighVolATRPct
+            );
+      }
+
       // Initialize all components
       if (!g_trend_detector.Init())
       {
@@ -335,6 +378,13 @@ int OnInit()
       if (!g_position_manager.Init())
       {
             LogPrint("ERROR: PositionManager initialization failed");
+            return INIT_FAILED;
+      }
+
+      // Initialize Adaptive TP Manager
+      if(InpEnableAdaptiveTP && !g_adaptive_tp_manager.Init())
+      {
+            LogPrint("ERROR: AdaptiveTPManager initialization failed");
             return INIT_FAILED;
       }
 
@@ -398,7 +448,9 @@ int OnInit()
                                                     InpTP1Distance, InpTP2Distance,
                                                     InpEnableAlerts, InpEnablePush, InpEnableEmail,
                                                     InpRiskAPlusSetup, InpRiskASetup, InpRiskBPlusSetup, InpRiskBSetup,
-                                                    InpShortRiskMultiplier);
+                                                    InpShortRiskMultiplier,
+                                                    g_adaptive_tp_manager, g_regime_classifier,
+                                                    InpEnableAdaptiveTP);
 
       g_signal_processor = new CSignalProcessor(g_trend_detector, g_regime_classifier, g_macro_bias,
                                                 g_price_action, g_price_action_lowvol,
@@ -478,6 +530,7 @@ void OnDeinit(const int reason)
       delete g_risk_manager;
       delete g_trade_executor;
       delete g_position_manager;
+      delete g_adaptive_tp_manager;
 
       // Cleanup new modular components
       delete g_signal_validator;

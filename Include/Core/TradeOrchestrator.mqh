@@ -10,6 +10,7 @@
 #include "../Management/TradeExecutor.mqh"
 #include "../Management/RiskManager.mqh"
 #include "../Management/SignalManager.mqh"
+#include "../Management/AdaptiveTPManager.mqh"
 #include "../Common/TradeLogger.mqh"
 #include "PositionCoordinator.mqh"
 #include "RiskMonitor.mqh"
@@ -25,8 +26,11 @@ private:
    CTradeLogger*        m_trade_logger;
    CPositionCoordinator* m_position_coordinator;
    CRiskMonitor*        m_risk_monitor;
+   CAdaptiveTPManager*  m_adaptive_tp_manager;
+   CRegimeClassifier*   m_regime_classifier;
 
    int                  m_handle_ma_200;
+   bool                 m_use_adaptive_tp;
 
    // Input parameters
    double               m_min_rr_ratio;
@@ -54,16 +58,21 @@ public:
                      double min_rr, bool use_200ema, double tp1_dist, double tp2_dist,
                      bool alerts, bool push, bool email,
                      double risk_aplus, double risk_a, double risk_bplus, double risk_b,
-                     double short_risk_multiplier)
+                     double short_risk_multiplier,
+                     CAdaptiveTPManager* adaptive_tp = NULL, CRegimeClassifier* regime = NULL,
+                     bool use_adaptive_tp = false)
    {
       m_trade_executor = executor;
       m_risk_manager = risk_mgr;
       m_trade_logger = logger;
       m_position_coordinator = pos_coordinator;
       m_risk_monitor = risk_monitor;
+      m_adaptive_tp_manager = adaptive_tp;
+      m_regime_classifier = regime;
       m_handle_ma_200 = handle_ma200;
       m_min_rr_ratio = min_rr;
       m_use_daily_200ema = use_200ema;
+      m_use_adaptive_tp = use_adaptive_tp;
       m_tp1_distance = tp1_dist;
       m_tp2_distance = tp2_dist;
       m_enable_alerts = alerts;
@@ -301,26 +310,66 @@ public:
       double tp2_recalc = 0;
 
       if(pending_signal.signal_type == SIGNAL_LONG)
-      {
          risk_distance = current_entry - pending_signal.stop_loss;
-         tp1_recalc = current_entry + (risk_distance * m_tp1_distance);
-         tp2_recalc = current_entry + (risk_distance * m_tp2_distance);
-      }
       else
-      {
          risk_distance = pending_signal.stop_loss - current_entry;
-         tp1_recalc = current_entry - (risk_distance * m_tp1_distance);
-         tp2_recalc = current_entry - (risk_distance * m_tp2_distance);
-      }
 
       LogPrint("    Original Entry: ", pending_signal.entry_price, " | Current Entry: ", current_entry);
       LogPrint("    SL: ", pending_signal.stop_loss, " | Risk: ", DoubleToString(risk_distance, 2), " pts");
-      LogPrint("    TP1 recalculated: ", pending_signal.take_profit1, " -> ", tp1_recalc);
-      LogPrint("    TP2 recalculated: ", pending_signal.take_profit2, " -> ", tp2_recalc);
 
       // Use recalculated TPs
-      double final_tp1 = tp1_recalc;
-      double final_tp2 = tp2_recalc;
+      double final_tp1 = 0;
+      double final_tp2 = 0;
+
+      // === ADAPTIVE TP SYSTEM ===
+      if(m_use_adaptive_tp && m_adaptive_tp_manager != NULL && m_regime_classifier != NULL)
+      {
+         LogPrint("    Using ADAPTIVE TP System...");
+
+         // Get current regime
+         ENUM_REGIME_TYPE current_regime = m_regime_classifier.GetRegime();
+
+         // Calculate adaptive TPs
+         SAdaptiveTPResult adaptive_result = m_adaptive_tp_manager.CalculateAdaptiveTPs(
+            pending_signal.signal_type,
+            current_entry,
+            pending_signal.stop_loss,
+            current_regime,
+            pending_signal.pattern_type
+         );
+
+         final_tp1 = adaptive_result.tp1;
+         final_tp2 = adaptive_result.tp2;
+
+         LogPrint("    Adaptive TP Mode: ", adaptive_result.tp_mode);
+         LogPrint("    Adaptive Multipliers: TP1=", DoubleToString(adaptive_result.tp1_multiplier, 2),
+                  "x | TP2=", DoubleToString(adaptive_result.tp2_multiplier, 2), "x");
+         if(adaptive_result.next_resistance > 0)
+            LogPrint("    Next Resistance: ", DoubleToString(adaptive_result.next_resistance, 2));
+         if(adaptive_result.next_support > 0)
+            LogPrint("    Next Support: ", DoubleToString(adaptive_result.next_support, 2));
+      }
+      else
+      {
+         // === FALLBACK: Original fixed TP calculation ===
+         LogPrint("    Using FIXED TP multipliers (", m_tp1_distance, "x / ", m_tp2_distance, "x)");
+
+         if(pending_signal.signal_type == SIGNAL_LONG)
+         {
+            tp1_recalc = current_entry + (risk_distance * m_tp1_distance);
+            tp2_recalc = current_entry + (risk_distance * m_tp2_distance);
+         }
+         else
+         {
+            tp1_recalc = current_entry - (risk_distance * m_tp1_distance);
+            tp2_recalc = current_entry - (risk_distance * m_tp2_distance);
+         }
+
+         final_tp1 = tp1_recalc;
+         final_tp2 = tp2_recalc;
+      }
+
+      LogPrint("    Final TPs: TP1=", DoubleToString(final_tp1, 2), " | TP2=", DoubleToString(final_tp2, 2));
 
       // Ensure R:R meets minimum by using the farther TP distance
       double reward = MathAbs(MathMax(final_tp1, final_tp2) - current_entry);
@@ -333,8 +382,8 @@ public:
          double tp2_mult = MathMax(m_tp2_distance, tp1_mult_needed + 0.3); // keep TP2 beyond TP1
          final_tp2 = current_entry + sign * risk_distance * tp2_mult;
 
-         LogPrint("    R:R boosted for confirmation: TP1=", final_tp1, " TP2=", final_tp2,
-                  " (min RR ", m_min_rr_ratio, ")");
+         LogPrint("    R:R boosted to meet minimum: TP1=", DoubleToString(final_tp1, 2),
+                  " TP2=", DoubleToString(final_tp2, 2), " (min RR ", m_min_rr_ratio, ")");
       }
 
       // Get risk percentage for this quality tier
