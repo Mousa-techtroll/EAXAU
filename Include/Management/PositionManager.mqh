@@ -8,7 +8,9 @@
 #include "../Common/Enums.mqh"
 #include "../Common/Structs.mqh"
 #include "../Common/Utils.mqh"
-#include "TradeExecutor.mqh" 
+#include "TradeExecutor.mqh"
+#include "TrailingStopOptimizer.mqh"
+
 //+------------------------------------------------------------------+
 //| Position Manager Class                                            |
 //+------------------------------------------------------------------+
@@ -16,6 +18,7 @@ class CPositionManager
 {
 private:
    CTradeExecutor*      m_executor;
+   CTrailingStopOptimizer* m_trailing_optimizer;  // Advanced trailing
    int                  m_handle_ma_h1;
    int                  m_handle_atr_trail;  // PERFORMANCE FIX: Cached ATR handle for trailing
 
@@ -23,6 +26,7 @@ private:
    int                  m_atr_period_trail;
    double               m_atr_multiplier_trail;
    double               m_min_trail_movement;
+   bool                 m_use_optimizer;  // Use advanced trailing optimizer
 
    // Auto-close configuration
    bool                 m_auto_close_choppy;
@@ -44,6 +48,8 @@ public:
                     double tp1_volume = 40.0, double tp2_volume = 30.0, double be_offset = 50.0)
    {
       m_executor = executor;
+      m_trailing_optimizer = NULL;
+      m_use_optimizer = false;
       m_atr_period_trail = atr_period;
       m_atr_multiplier_trail = atr_mult;
       m_min_trail_movement = min_movement;
@@ -52,6 +58,18 @@ public:
       m_tp1_volume_pct = tp1_volume / 100.0;
       m_tp2_volume_pct = tp2_volume / 100.0;
       m_breakeven_offset_points = be_offset;  // RISK FIX: Configurable BE offset (default 50 points = $0.50)
+   }
+
+   //+------------------------------------------------------------------+
+   //| Configure advanced trailing optimizer                             |
+   //+------------------------------------------------------------------+
+   void ConfigureTrailingOptimizer(CTrailingStopOptimizer* optimizer, bool enabled)
+   {
+      m_trailing_optimizer = optimizer;
+      m_use_optimizer = enabled;
+
+      if(m_use_optimizer && m_trailing_optimizer != NULL)
+         LogPrint("PositionManager: Advanced Trailing Optimizer ENABLED");
    }
    
    //+------------------------------------------------------------------+
@@ -188,10 +206,61 @@ public:
       }
       
       // Step 3: Trail remaining position with ATR-based trailing stop
-      // NOTE: Function named "TrailWithMA" is misleading - it actually uses ATR (m_handle_atr_trail)
       if(position.tp1_closed)
       {
-         TrailWithATR(position, is_long);
+         // Use advanced optimizer if enabled, otherwise fall back to basic ATR trailing
+         if(m_use_optimizer && m_trailing_optimizer != NULL)
+         {
+            TrailWithOptimizer(position, is_long);
+         }
+         else
+         {
+            TrailWithATR(position, is_long);
+         }
+      }
+      // Also check for breakeven move even before TP1 if using optimizer
+      else if(m_use_optimizer && m_trailing_optimizer != NULL && !position.at_breakeven)
+      {
+         // Check if we should move to breakeven early based on optimizer
+         if(m_trailing_optimizer.ShouldMoveToBreakeven(position))
+         {
+            double be_price = m_trailing_optimizer.GetBreakevenPrice(position);
+            if(m_executor.ModifyStopLoss(position.ticket, be_price))
+            {
+               position.at_breakeven = true;
+               LogPrint(">>> OPTIMIZER: Early breakeven for #", position.ticket, " at ", DoubleToString(be_price, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+            }
+         }
+      }
+   }
+
+   //+------------------------------------------------------------------+
+   //| Trail stop with advanced optimizer                                |
+   //+------------------------------------------------------------------+
+   void TrailWithOptimizer(SPosition &position, bool is_long)
+   {
+      if(m_trailing_optimizer == NULL) return;
+
+      double current_sl = PositionGetDouble(POSITION_SL);
+      double new_sl = m_trailing_optimizer.CalculateTrailingStop(position);
+
+      // Only modify if meaningful improvement
+      bool should_modify = false;
+      if(is_long)
+      {
+         should_modify = (new_sl > current_sl && (new_sl - current_sl) >= m_min_trail_movement * _Point);
+      }
+      else
+      {
+         should_modify = (new_sl < current_sl && (current_sl - new_sl) >= m_min_trail_movement * _Point);
+      }
+
+      if(should_modify)
+      {
+         if(m_executor.ModifyStopLoss(position.ticket, new_sl))
+         {
+            LogPrint(">>> OPTIMIZER TRAIL: #", position.ticket, " SL moved to ", DoubleToString(new_sl, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+         }
       }
    }
    

@@ -17,6 +17,7 @@
 #include "../Management/SignalManager.mqh"
 #include "../Management/RiskManager.mqh"
 #include "../Filters/MarketFilters.mqh"
+#include "../Components/MomentumFilter.mqh"
 #include "RiskMonitor.mqh"
 #include "TradeOrchestrator.mqh"
 
@@ -38,9 +39,13 @@ private:
    CRiskManager*         m_risk_manager;
    CRiskMonitor*         m_risk_monitor;
    CTradeOrchestrator*   m_trade_orchestrator;
+   CMomentumFilter*      m_momentum_filter;
 
    int                   m_handle_ma_200;
    int                   m_handle_adx_h1;
+
+   // Momentum filter settings
+   bool                  m_momentum_enabled;
 
    // Session/Time filters
    bool                  m_trade_asia;
@@ -192,6 +197,22 @@ public:
       m_short_trend_min_adx = short_trend_min_adx;
       m_short_trend_max_adx = short_trend_max_adx;
       m_short_mr_macro_max = short_mr_macro_max;
+
+      // Default momentum to disabled
+      m_momentum_filter = NULL;
+      m_momentum_enabled = false;
+   }
+
+   //+------------------------------------------------------------------+
+   //| Configure momentum filter                                         |
+   //+------------------------------------------------------------------+
+   void ConfigureMomentumFilter(CMomentumFilter* momentum, bool enabled)
+   {
+      m_momentum_filter = momentum;
+      m_momentum_enabled = enabled;
+
+      if(m_momentum_enabled && m_momentum_filter != NULL)
+         LogPrint("SignalProcessor: Momentum Filter ENABLED");
    }
 
    //+------------------------------------------------------------------+
@@ -427,6 +448,23 @@ public:
             return;
          }
          LogPrint(">>> SMC VALIDATION PASSED - Confluence Score: ", smc_confluence);
+      }
+
+      // Momentum Filter Validation
+      if (m_momentum_enabled && m_momentum_filter != NULL)
+      {
+         bool momentum_ok = false;
+         if (pa_signal == SIGNAL_LONG)
+            momentum_ok = m_momentum_filter.ValidateLongMomentum();
+         else if (pa_signal == SIGNAL_SHORT)
+            momentum_ok = m_momentum_filter.ValidateShortMomentum();
+
+         if (!momentum_ok)
+         {
+            LogPrint(">>> MOMENTUM VALIDATION FAILED - Trade rejected");
+            return;
+         }
+         LogPrint(">>> MOMENTUM VALIDATION PASSED - Score: ", m_momentum_filter.GetMomentumScore());
       }
 
       // Evaluate setup quality

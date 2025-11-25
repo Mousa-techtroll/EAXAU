@@ -25,8 +25,10 @@
 #include "Include/Management/PositionManager.mqh"
 #include "Include/Management/SignalManager.mqh"
 #include "Include/Management/AdaptiveTPManager.mqh"
+#include "Include/Management/TrailingStopOptimizer.mqh"
 #include "Include/Filters/MarketFilters.mqh"
 #include "Include/Components/SMCOrderBlocks.mqh"
+#include "Include/Components/MomentumFilter.mqh"
 
 // Include Core orchestration classes
 #include "Include/Core/MarketStateManager.mqh"
@@ -114,6 +116,31 @@ input int    InpSMCZoneMaxAge = 200;                  // Zone Max Age (bars)
 input bool   InpSMCUseHTFConfluence = true;           // Require HTF Confluence
 input int    InpSMCMinConfluence = 55;                // Min SMC Confluence Score to Trade (0-100)
 input bool   InpSMCBlockCounterSMC = true;            // Block trades against SMC bias
+
+input group "=== MOMENTUM FILTER ==="
+input bool   InpEnableMomentum = true;                // Enable Momentum Filter
+input int    InpMomRSIPeriod = 14;                    // RSI Period
+input double InpMomRSIOverbought = 70.0;              // RSI Overbought Level
+input double InpMomRSIOversold = 30.0;                // RSI Oversold Level
+input int    InpMomMACDFast = 12;                     // MACD Fast Period
+input int    InpMomMACDSlow = 26;                     // MACD Slow Period
+input int    InpMomMACDSignal = 9;                    // MACD Signal Period
+input int    InpMomStochK = 14;                       // Stochastic %K Period
+input int    InpMomStochD = 3;                        // Stochastic %D Period
+input double InpMomStochOB = 80.0;                    // Stochastic Overbought
+input double InpMomStochOS = 20.0;                    // Stochastic Oversold
+input int    InpMomMinScore = 20;                     // Min Momentum Score to Trade
+
+input group "=== TRAILING STOP OPTIMIZER ==="
+input bool   InpEnableTrailOptimizer = true;          // Enable Trailing Stop Optimizer
+input int    InpTrailStrategy = 5;                    // Trail Strategy (0=None,1=ATR,2=Swing,3=SAR,4=Chandelier,5=Stepped,6=Hybrid)
+input double InpTrailATRMult = 2.0;                   // ATR Multiplier for Trailing
+input int    InpTrailSwingLookback = 10;              // Swing Lookback Bars
+input double InpTrailChandelierMult = 3.0;            // Chandelier ATR Multiplier
+input double InpTrailStepSize = 0.5;                  // Step Size (ATR multiple)
+input int    InpTrailMinProfit = 100;                 // Min Profit Points to Start Trailing
+input double InpTrailBETrigger = 1.5;                 // Breakeven Trigger (ATR multiple)
+input double InpTrailBEOffset = 10.0;                 // Breakeven Offset (points)
 
 input group "=== ADAPTIVE TAKE PROFIT SYSTEM ==="
 input bool   InpEnableAdaptiveTP = true;              // Enable Adaptive TP System
@@ -239,6 +266,8 @@ CTradeExecutor *             g_trade_executor;
 CPositionManager *           g_position_manager;
 CAdaptiveTPManager *         g_adaptive_tp_manager;
 CSMCOrderBlocks *            g_smc_order_blocks;
+CMomentumFilter *            g_momentum_filter;
+CTrailingStopOptimizer *     g_trailing_optimizer;
 
 // New modular components
 CSignalValidator *           g_signal_validator;
@@ -296,6 +325,17 @@ int OnInit()
       {
             LogPrint("  OB Lookback: ", InpSMCOBLookback, " bars | Impulse Mult: ", InpSMCOBImpulseMult, "x");
             LogPrint("  Min Confluence: ", InpSMCMinConfluence, "/100 | Block Counter-SMC: ", InpSMCBlockCounterSMC ? "ON" : "OFF");
+      }
+      LogPrint("Momentum Filter: ", InpEnableMomentum ? "ENABLED" : "DISABLED");
+      if (InpEnableMomentum)
+      {
+            LogPrint("  RSI(", InpMomRSIPeriod, ") OB:", InpMomRSIOverbought, " OS:", InpMomRSIOversold);
+            LogPrint("  MACD(", InpMomMACDFast, ",", InpMomMACDSlow, ",", InpMomMACDSignal, ") | Stoch(", InpMomStochK, ",", InpMomStochD, ")");
+      }
+      LogPrint("Trailing Stop Optimizer: ", InpEnableTrailOptimizer ? "ENABLED" : "DISABLED");
+      if (InpEnableTrailOptimizer)
+      {
+            LogPrint("  Strategy: ", InpTrailStrategy, " | ATR Mult: ", InpTrailATRMult, "x | Min Profit: ", InpTrailMinProfit, " pts");
       }
       if (InpEnableHybridLogic) // Simplified check
       {
@@ -371,6 +411,32 @@ int OnInit()
             );
       }
 
+      // Create Momentum Filter Module
+      g_momentum_filter = new CMomentumFilter();
+      if(InpEnableMomentum)
+      {
+            g_momentum_filter.Configure(
+                  InpMomRSIPeriod, InpMomRSIOverbought, InpMomRSIOversold,
+                  InpMomMACDFast, InpMomMACDSlow, InpMomMACDSignal,
+                  InpMomStochK, InpMomStochD, InpMomStochOB, InpMomStochOS,
+                  20, 100.0, -100.0,  // CCI defaults
+                  14, InpMomMinScore, 20  // MFI, min score, divergence lookback
+            );
+      }
+
+      // Create Trailing Stop Optimizer Module
+      g_trailing_optimizer = new CTrailingStopOptimizer();
+      if(InpEnableTrailOptimizer)
+      {
+            g_trailing_optimizer.Configure(
+                  (ENUM_TRAIL_STRATEGY)InpTrailStrategy,
+                  14, InpTrailATRMult,
+                  InpTrailSwingLookback, 0.02, 0.2,
+                  InpTrailChandelierMult, InpTrailStepSize,
+                  InpTrailMinProfit, InpTrailBETrigger, InpTrailBEOffset
+            );
+      }
+
       // Initialize all components
       if (!g_trend_detector.Init())
       {
@@ -414,6 +480,12 @@ int OnInit()
             return INIT_FAILED;
       }
 
+      // Configure Trailing Stop Optimizer for PositionManager
+      if(InpEnableTrailOptimizer && g_trailing_optimizer != NULL)
+      {
+            g_position_manager.ConfigureTrailingOptimizer(g_trailing_optimizer, InpEnableTrailOptimizer);
+      }
+
       // Initialize Adaptive TP Manager
       if(InpEnableAdaptiveTP && !g_adaptive_tp_manager.Init())
       {
@@ -425,6 +497,20 @@ int OnInit()
       if(InpEnableSMC && !g_smc_order_blocks.Init())
       {
             LogPrint("ERROR: SMCOrderBlocks initialization failed");
+            return INIT_FAILED;
+      }
+
+      // Initialize Momentum Filter Module
+      if(InpEnableMomentum && !g_momentum_filter.Init())
+      {
+            LogPrint("ERROR: MomentumFilter initialization failed");
+            return INIT_FAILED;
+      }
+
+      // Initialize Trailing Stop Optimizer Module
+      if(InpEnableTrailOptimizer && !g_trailing_optimizer.Init())
+      {
+            LogPrint("ERROR: TrailingStopOptimizer initialization failed");
             return INIT_FAILED;
       }
 
@@ -529,6 +615,12 @@ int OnInit()
                                                 InpBullMRShortAdxCap, InpBullMRShortMacroMax, InpShortRiskMultiplier,
                                                 InpShortTrendMinADX, InpShortTrendMaxADX, InpShortMRMacroMax);
 
+      // Configure Momentum Filter for SignalProcessor
+      if(InpEnableMomentum && g_momentum_filter != NULL)
+      {
+            g_signal_processor.ConfigureMomentumFilter(g_momentum_filter, InpEnableMomentum);
+      }
+
       LogPrint("Core orchestration classes initialized");
 
       // Initialize state
@@ -579,6 +671,8 @@ void OnDeinit(const int reason)
       delete g_position_manager;
       delete g_adaptive_tp_manager;
       delete g_smc_order_blocks;
+      delete g_momentum_filter;
+      delete g_trailing_optimizer;
 
       // Cleanup new modular components
       delete g_signal_validator;
