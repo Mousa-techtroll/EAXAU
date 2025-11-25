@@ -25,7 +25,6 @@
 #include "Include/Management/PositionManager.mqh"
 #include "Include/Management/SignalManager.mqh"
 #include "Include/Management/AdaptiveTPManager.mqh"
-#include "Include/Management/DynamicPositionSizer.mqh"
 #include "Include/Filters/MarketFilters.mqh"
 
 // Include Core orchestration classes
@@ -118,24 +117,6 @@ input double InpAdaptiveStrongADX = 35.0;             // ADX threshold for stron
 input double InpAdaptiveWeakADX = 20.0;               // ADX threshold for weak trend
 input double InpLowVolATRPct = 0.7;                   // ATR ratio for low volatility (<= this)
 input double InpHighVolATRPct = 1.3;                  // ATR ratio for high volatility (>= this)
-
-input group "=== DYNAMIC POSITION SIZING ==="
-input bool   InpEnableDynamicSizing = true;           // Enable Dynamic Position Sizing
-input double InpKellyFraction = 0.25;                 // Kelly Fraction (0.25 = Quarter Kelly, conservative)
-input int    InpMinKellyTrades = 20;                  // Min trades before using Kelly
-input double InpDynMinRisk = 0.5;                     // Minimum risk % (floor)
-input double InpDynMaxRisk = 3.0;                     // Maximum risk % (ceiling)
-input double InpDynBaseRisk = 1.0;                    // Base risk % when no history
-input double InpDynLowVolMult = 1.2;                  // Low volatility risk multiplier
-input double InpDynHighVolMult = 0.7;                 // High volatility risk multiplier
-input double InpDDThreshold1 = 5.0;                   // Drawdown % for Level 1 reduction
-input double InpDDThreshold2 = 10.0;                  // Drawdown % for Level 2 reduction
-input double InpDDRiskMult1 = 0.75;                   // Risk multiplier at DD Level 1
-input double InpDDRiskMult2 = 0.5;                    // Risk multiplier at DD Level 2
-input int    InpWinStreakThreshold = 3;               // Win streak threshold for boost
-input double InpWinStreakBoost = 1.15;                // Win streak risk boost multiplier
-input int    InpRecentTradesLookback = 10;            // Recent trades to weight heavily
-input double InpRecentTradesWeight = 0.6;             // Weight for recent trades (0-1)
 
 input group "=== MACRO BIAS ==="
 input string InpDXYSymbol = "USDX";                    // DXY symbol name
@@ -242,7 +223,6 @@ CRiskManager *               g_risk_manager;
 CTradeExecutor *             g_trade_executor;
 CPositionManager *           g_position_manager;
 CAdaptiveTPManager *         g_adaptive_tp_manager;
-CDynamicPositionSizer *      g_dynamic_sizer;
 
 // New modular components
 CSignalValidator *           g_signal_validator;
@@ -294,14 +274,6 @@ int OnInit()
             LogPrint("  Normal Vol TPs: ", InpNormalVolTP1Mult, "x / ", InpNormalVolTP2Mult, "x");
             LogPrint("  High Vol TPs: ", InpHighVolTP1Mult, "x / ", InpHighVolTP2Mult, "x");
             LogPrint("  Structure Targets: ", InpUseStructureTargets ? "ON" : "OFF");
-      }
-      LogPrint("Dynamic Position Sizing: ", InpEnableDynamicSizing ? "ENABLED" : "DISABLED");
-      if (InpEnableDynamicSizing)
-      {
-            LogPrint("  Kelly Fraction: ", InpKellyFraction * 100, "% (min ", InpMinKellyTrades, " trades)");
-            LogPrint("  Risk Range: ", InpDynMinRisk, "% - ", InpDynMaxRisk, "%");
-            LogPrint("  Drawdown Protection: ", InpDDThreshold1, "% / ", InpDDThreshold2, "%");
-            LogPrint("  Win Streak Boost: ", InpWinStreakBoost, "x after ", InpWinStreakThreshold, " wins");
       }
       if (InpEnableHybridLogic) // Simplified check
       {
@@ -366,21 +338,6 @@ int OnInit()
             );
       }
 
-      // Create Dynamic Position Sizer
-      g_dynamic_sizer = new CDynamicPositionSizer();
-      if(InpEnableDynamicSizing)
-      {
-            g_dynamic_sizer.Configure(
-                  InpKellyFraction, InpMinKellyTrades,
-                  InpDynMinRisk, InpDynMaxRisk, InpDynBaseRisk,
-                  InpDynLowVolMult, InpDynHighVolMult,
-                  InpDDThreshold1, InpDDThreshold2,
-                  InpDDRiskMult1, InpDDRiskMult2,
-                  InpWinStreakThreshold, InpWinStreakBoost,
-                  InpRecentTradesLookback, InpRecentTradesWeight
-            );
-      }
-
       // Initialize all components
       if (!g_trend_detector.Init())
       {
@@ -428,13 +385,6 @@ int OnInit()
       if(InpEnableAdaptiveTP && !g_adaptive_tp_manager.Init())
       {
             LogPrint("ERROR: AdaptiveTPManager initialization failed");
-            return INIT_FAILED;
-      }
-
-      // Initialize Dynamic Position Sizer
-      if(InpEnableDynamicSizing && !g_dynamic_sizer.Init())
-      {
-            LogPrint("ERROR: DynamicPositionSizer initialization failed");
             return INIT_FAILED;
       }
 
@@ -488,8 +438,7 @@ int OnInit()
       g_position_coordinator = new CPositionCoordinator(g_position_manager, g_trade_executor,
                                                         g_risk_manager, g_regime_classifier,
                                                         g_macro_bias, g_trade_logger,
-                                                        InpMagicNumber, InpCloseBeforeWeekend, InpWeekendCloseHour,
-                                                        g_dynamic_sizer, InpEnableDynamicSizing);
+                                                        InpMagicNumber, InpCloseBeforeWeekend, InpWeekendCloseHour);
       g_position_coordinator.Init();
 
       g_trade_orchestrator = new CTradeOrchestrator(g_trade_executor, g_risk_manager,
@@ -501,8 +450,7 @@ int OnInit()
                                                     InpRiskAPlusSetup, InpRiskASetup, InpRiskBPlusSetup, InpRiskBSetup,
                                                     InpShortRiskMultiplier,
                                                     g_adaptive_tp_manager, g_regime_classifier,
-                                                    InpEnableAdaptiveTP,
-                                                    g_dynamic_sizer, InpEnableDynamicSizing);
+                                                    InpEnableAdaptiveTP);
 
       g_signal_processor = new CSignalProcessor(g_trend_detector, g_regime_classifier, g_macro_bias,
                                                 g_price_action, g_price_action_lowvol,
@@ -583,7 +531,6 @@ void OnDeinit(const int reason)
       delete g_trade_executor;
       delete g_position_manager;
       delete g_adaptive_tp_manager;
-      delete g_dynamic_sizer;
 
       // Cleanup new modular components
       delete g_signal_validator;
