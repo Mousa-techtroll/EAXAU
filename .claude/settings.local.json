@@ -10,7 +10,11 @@
       "Bash(\"C:\\Program Files\\Vantage International MT5\\MetaEditor64.exe\" /compile:\"C:\\newTrader8\\Include\\Core\\PositionCoordinator.mqh\" /log)",
       "Bash(\"C:\\Program Files\\Vantage International MT5\\MetaEditor64.exe\" /compile:Stack17_Main.mq5 /log)",
       "Bash(\"C:\\Program Files\\Vantage International MT5\\MetaEditor64.exe\" /compile:\"C:\\newTrader8\\test_position_coordinator.mq5\" /log)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(cat:*)",
+      "Bash(git commit:*)",
+      "Bash('/mnt/c/Program Files/Vantage International MT5/MetaEditor64.exe' /compile:C:newTrader9Stack17_Main.mq5 /log:C:newTrader9compile.log)",
+      "Bash('/mnt/c/Program Files/Vantage International MT5/MetaEditor64.exe' /compile:\"/mnt/c/newTrader9/Stack17_Main.mq5\" /log:\"/mnt/c/newTrader9/compile.log\")"
     ],
     "deny": [],
     "ask": []

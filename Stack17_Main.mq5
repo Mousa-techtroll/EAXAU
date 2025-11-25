@@ -112,7 +112,7 @@ input double InpSMCLiqTolerance = 30.0;               // Liquidity Equal Toleran
 input int    InpSMCLiqMinTouches = 2;                 // Liquidity Min Touches
 input int    InpSMCZoneMaxAge = 200;                  // Zone Max Age (bars)
 input bool   InpSMCUseHTFConfluence = true;           // Require HTF Confluence
-input int    InpSMCMinConfluence = 60;                // Min SMC Confluence Score to Trade (0-100)
+input int    InpSMCMinConfluence = 55;                // Min SMC Confluence Score to Trade (0-100)
 input bool   InpSMCBlockCounterSMC = true;            // Block trades against SMC bias
 
 input group "=== ADAPTIVE TAKE PROFIT SYSTEM ==="
