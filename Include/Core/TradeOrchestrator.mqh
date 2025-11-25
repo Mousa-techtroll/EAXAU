@@ -12,6 +12,7 @@
 #include "../Management/SignalManager.mqh"
 #include "../Management/AdaptiveTPManager.mqh"
 #include "../Common/TradeLogger.mqh"
+#include "../Components/VolatilityRegimeManager.mqh"
 #include "PositionCoordinator.mqh"
 #include "RiskMonitor.mqh"
 
@@ -28,6 +29,7 @@ private:
    CRiskMonitor*        m_risk_monitor;
    CAdaptiveTPManager*  m_adaptive_tp_manager;
    CRegimeClassifier*   m_regime_classifier;
+   CVolatilityRegimeManager* m_volatility_regime;
 
    int                  m_handle_ma_200;
    bool                 m_use_adaptive_tp;
@@ -60,7 +62,8 @@ public:
                      double risk_aplus, double risk_a, double risk_bplus, double risk_b,
                      double short_risk_multiplier,
                      CAdaptiveTPManager* adaptive_tp = NULL, CRegimeClassifier* regime = NULL,
-                     bool use_adaptive_tp = false)
+                     bool use_adaptive_tp = false,
+                     CVolatilityRegimeManager* vol_regime = NULL)
    {
       m_trade_executor = executor;
       m_risk_manager = risk_mgr;
@@ -69,6 +72,7 @@ public:
       m_risk_monitor = risk_monitor;
       m_adaptive_tp_manager = adaptive_tp;
       m_regime_classifier = regime;
+      m_volatility_regime = vol_regime;
       m_handle_ma_200 = handle_ma200;
       m_min_rr_ratio = min_rr;
       m_use_daily_200ema = use_200ema;
@@ -389,6 +393,8 @@ public:
       // Get risk percentage for this quality tier
       double base_risk = GetRiskForQuality(pending_signal.quality, pending_signal.pattern_name);
       double adjusted_risk = m_risk_manager.AdjustRiskForStreak(base_risk);
+
+      // Apply short risk multiplier
       if (pending_signal.signal_type == SIGNAL_SHORT && m_short_risk_multiplier > 0)
       {
          adjusted_risk *= m_short_risk_multiplier;
@@ -396,7 +402,23 @@ public:
                   " => ", adjusted_risk, "%");
       }
 
-      LogPrint("    Risk: ", base_risk, "% (adjusted: ", adjusted_risk, "%)");
+      // Apply Volatility Regime Risk Adjustment (Enhancement 6)
+      if (m_volatility_regime != NULL && m_volatility_regime.IsEnabled())
+      {
+         double vol_multiplier = m_volatility_regime.GetRiskMultiplier();
+         if (MathAbs(vol_multiplier - 1.0) > 0.01)  // Only log if significant adjustment
+         {
+            double pre_vol_risk = adjusted_risk;
+            adjusted_risk = m_volatility_regime.AdjustRiskForVolatility(adjusted_risk);
+            SVolatilityAnalysis vol_analysis = m_volatility_regime.GetAnalysis();
+            LogPrint("    Volatility Regime: ", vol_analysis.regime_description);
+            LogPrint("    ATR Ratio: ", DoubleToString(vol_analysis.atr_ratio, 2),
+                     " | Risk: ", DoubleToString(pre_vol_risk, 2), "% -> ",
+                     DoubleToString(adjusted_risk, 2), "% (x", DoubleToString(vol_multiplier, 2), ")");
+         }
+      }
+
+      LogPrint("    Risk: ", base_risk, "% (final adjusted: ", adjusted_risk, "%)");
 
       // Calculate lot size based on CURRENT entry and SL
       double lot_size = m_risk_manager.CalculateLotSize(adjusted_risk, current_entry, pending_signal.stop_loss);

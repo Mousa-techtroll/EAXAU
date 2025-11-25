@@ -29,6 +29,7 @@
 #include "Include/Filters/MarketFilters.mqh"
 #include "Include/Components/SMCOrderBlocks.mqh"
 #include "Include/Components/MomentumFilter.mqh"
+#include "Include/Components/VolatilityRegimeManager.mqh"
 
 // Include Core orchestration classes
 #include "Include/Core/MarketStateManager.mqh"
@@ -118,7 +119,10 @@ input int    InpSMCMinConfluence = 55;                // Min SMC Confluence Scor
 input bool   InpSMCBlockCounterSMC = true;            // Block trades against SMC bias
 
 input group "=== MOMENTUM FILTER ==="
-input bool   InpEnableMomentum = true;                // Enable Momentum Filter
+input bool   InpEnableMomentum = false;               // Enable Momentum Filter (DISABLED - hurts profits more than helps)
+input bool   InpMomAdaptiveMode = true;               // Adaptive Mode (only filter in high volatility)
+input double InpMomATRMultThresh = 1.3;               // ATR Multiplier Threshold (filter when ATR > baseline * this)
+input double InpMomADXThresh = 30.0;                  // ADX Threshold (filter when ADX > this)
 input int    InpMomRSIPeriod = 14;                    // RSI Period
 input double InpMomRSIOverbought = 70.0;              // RSI Overbought Level
 input double InpMomRSIOversold = 30.0;                // RSI Oversold Level
@@ -132,15 +136,15 @@ input double InpMomStochOS = 20.0;                    // Stochastic Oversold
 input int    InpMomMinScore = 20;                     // Min Momentum Score to Trade
 
 input group "=== TRAILING STOP OPTIMIZER ==="
-input bool   InpEnableTrailOptimizer = true;          // Enable Trailing Stop Optimizer
-input int    InpTrailStrategy = 5;                    // Trail Strategy (0=None,1=ATR,2=Swing,3=SAR,4=Chandelier,5=Stepped,6=Hybrid)
-input double InpTrailATRMult = 2.0;                   // ATR Multiplier for Trailing
+input bool   InpEnableTrailOptimizer = false;         // Enable Trailing Stop Optimizer (DISABLED - cuts winners too early)
+input int    InpTrailStrategy = 1;                    // Trail Strategy (0=None,1=ATR,2=Swing,3=SAR,4=Chandelier,5=Stepped,6=Hybrid)
+input double InpTrailATRMult = 2.5;                   // ATR Multiplier for Trailing (wider = less aggressive)
 input int    InpTrailSwingLookback = 10;              // Swing Lookback Bars
 input double InpTrailChandelierMult = 3.0;            // Chandelier ATR Multiplier
 input double InpTrailStepSize = 0.5;                  // Step Size (ATR multiple)
-input int    InpTrailMinProfit = 100;                 // Min Profit Points to Start Trailing
-input double InpTrailBETrigger = 1.5;                 // Breakeven Trigger (ATR multiple)
-input double InpTrailBEOffset = 10.0;                 // Breakeven Offset (points)
+input int    InpTrailMinProfit = 150;                 // Min Profit Points to Start Trailing (higher = let winners run)
+input double InpTrailBETrigger = 2.0;                 // Breakeven Trigger (ATR multiple, higher = later BE)
+input double InpTrailBEOffset = 50.0;                 // Breakeven Offset (points, wider = more room)
 
 input group "=== ADAPTIVE TAKE PROFIT SYSTEM ==="
 input bool   InpEnableAdaptiveTP = true;              // Enable Adaptive TP System
@@ -159,6 +163,22 @@ input double InpAdaptiveStrongADX = 35.0;             // ADX threshold for stron
 input double InpAdaptiveWeakADX = 20.0;               // ADX threshold for weak trend
 input double InpLowVolATRPct = 0.7;                   // ATR ratio for low volatility (<= this)
 input double InpHighVolATRPct = 1.3;                  // ATR ratio for high volatility (>= this)
+
+input group "=== VOLATILITY REGIME RISK (Enhancement 6) ==="
+input bool   InpEnableVolRegime = true;               // Enable Volatility-Based Risk Adjustment
+input double InpVolVeryLowThresh = 0.5;               // Very Low Vol Threshold (ATR ratio)
+input double InpVolLowThresh = 0.7;                   // Low Vol Threshold (ATR ratio)
+input double InpVolNormalThresh = 1.0;                // Normal Vol Threshold (ATR ratio)
+input double InpVolHighThresh = 1.3;                  // High Vol Threshold (ATR ratio)
+input double InpVolVeryLowRisk = 0.85;                // Very Low Vol: Risk multiplier (was 0.7, less aggressive)
+input double InpVolLowRisk = 0.92;                    // Low Vol: Risk multiplier (was 0.85)
+input double InpVolNormalRisk = 1.0;                  // Normal Vol: Risk multiplier
+input double InpVolHighRisk = 1.0;                    // High Vol: Risk multiplier
+input double InpVolExtremeRisk = 0.75;                // Extreme Vol: Risk multiplier (was 0.6, less aggressive)
+input double InpVolExpansionThresh = 1.5;             // Expansion Detection: ATR change ratio
+input double InpVolExpansionCut = 0.8;                // Expansion: Risk cut when vol spiking (was 0.7)
+input double InpVolContractionThresh = 0.7;           // Contraction Detection: ATR change ratio
+input double InpVolContractionBoost = 1.1;            // Contraction: Risk boost when vol settling
 
 input group "=== MACRO BIAS ==="
 input string InpDXYSymbol = "USDX";                    // DXY symbol name
@@ -268,6 +288,7 @@ CAdaptiveTPManager *         g_adaptive_tp_manager;
 CSMCOrderBlocks *            g_smc_order_blocks;
 CMomentumFilter *            g_momentum_filter;
 CTrailingStopOptimizer *     g_trailing_optimizer;
+CVolatilityRegimeManager *   g_volatility_regime;
 
 // New modular components
 CSignalValidator *           g_signal_validator;
@@ -336,6 +357,14 @@ int OnInit()
       if (InpEnableTrailOptimizer)
       {
             LogPrint("  Strategy: ", InpTrailStrategy, " | ATR Mult: ", InpTrailATRMult, "x | Min Profit: ", InpTrailMinProfit, " pts");
+      }
+      LogPrint("Volatility Regime Risk (Enh 6): ", InpEnableVolRegime ? "ENABLED" : "DISABLED");
+      if (InpEnableVolRegime)
+      {
+            LogPrint("  ATR Thresholds: VeryLow<", InpVolVeryLowThresh, " | Low<", InpVolLowThresh,
+                     " | Normal<", InpVolNormalThresh, " | High<", InpVolHighThresh);
+            LogPrint("  Risk Multipliers: VeryLow=", InpVolVeryLowRisk, "x | Low=", InpVolLowRisk,
+                     "x | Normal=", InpVolNormalRisk, "x | High=", InpVolHighRisk, "x | Extreme=", InpVolExtremeRisk, "x");
       }
       if (InpEnableHybridLogic) // Simplified check
       {
@@ -422,6 +451,8 @@ int OnInit()
                   20, 100.0, -100.0,  // CCI defaults
                   14, InpMomMinScore, 20  // MFI, min score, divergence lookback
             );
+            // Configure adaptive mode (only filter in high volatility markets)
+            g_momentum_filter.ConfigureAdaptive(InpMomAdaptiveMode, InpMomATRMultThresh, InpMomADXThresh);
       }
 
       // Create Trailing Stop Optimizer Module
@@ -434,6 +465,18 @@ int OnInit()
                   InpTrailSwingLookback, 0.02, 0.2,
                   InpTrailChandelierMult, InpTrailStepSize,
                   InpTrailMinProfit, InpTrailBETrigger, InpTrailBEOffset
+            );
+      }
+
+      // Create Volatility Regime Manager (Enhancement 6)
+      g_volatility_regime = new CVolatilityRegimeManager();
+      g_volatility_regime.SetEnabled(InpEnableVolRegime);
+      if(InpEnableVolRegime)
+      {
+            g_volatility_regime.Configure(
+                  InpVolVeryLowThresh, InpVolLowThresh, InpVolNormalThresh, InpVolHighThresh,
+                  InpVolVeryLowRisk, InpVolLowRisk, InpVolNormalRisk, InpVolHighRisk, InpVolExtremeRisk,
+                  InpVolExpansionThresh, InpVolExpansionCut, InpVolContractionThresh, InpVolContractionBoost
             );
       }
 
@@ -514,6 +557,13 @@ int OnInit()
             return INIT_FAILED;
       }
 
+      // Initialize Volatility Regime Manager (Enhancement 6)
+      if(InpEnableVolRegime && !g_volatility_regime.Init())
+      {
+            LogPrint("ERROR: VolatilityRegimeManager initialization failed");
+            return INIT_FAILED;
+      }
+
       // PERFORMANCE FIX: Initialize H1 ADX handle for filter (DI+ and DI- access)
       g_handle_adx_h1 = iADX(_Symbol, PERIOD_H1, 14);
       if (g_handle_adx_h1 == INVALID_HANDLE)
@@ -583,7 +633,8 @@ int OnInit()
                                                     InpRiskAPlusSetup, InpRiskASetup, InpRiskBPlusSetup, InpRiskBSetup,
                                                     InpShortRiskMultiplier,
                                                     g_adaptive_tp_manager, g_regime_classifier,
-                                                    InpEnableAdaptiveTP);
+                                                    InpEnableAdaptiveTP,
+                                                    g_volatility_regime);
 
       g_signal_processor = new CSignalProcessor(g_trend_detector, g_regime_classifier, g_macro_bias,
                                                 g_price_action, g_price_action_lowvol,
@@ -673,6 +724,7 @@ void OnDeinit(const int reason)
       delete g_smc_order_blocks;
       delete g_momentum_filter;
       delete g_trailing_optimizer;
+      delete g_volatility_regime;
 
       // Cleanup new modular components
       delete g_signal_validator;
