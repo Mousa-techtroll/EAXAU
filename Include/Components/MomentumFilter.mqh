@@ -393,26 +393,22 @@ public:
                " | RSI H4=", DoubleToString(m_analysis.rsi_h4, 1),
                " | MACD=", DoubleToString(m_analysis.macd_histogram, 5));
 
-      // Block longs if strong bearish momentum
-      if(m_analysis.momentum_score <= -40)
+      // Block longs ONLY if VERY strong bearish momentum (raised threshold from -40 to -60)
+      if(m_analysis.momentum_score <= -60)
       {
-         LogPrint(">>> MOMENTUM REJECT: Long blocked - strong bearish momentum (", m_analysis.momentum_score, ")");
+         LogPrint(">>> MOMENTUM REJECT: Long blocked - very strong bearish momentum (", m_analysis.momentum_score, ")");
          return false;
       }
 
-      // Block longs if both RSI timeframes are overbought
-      if(m_analysis.rsi_h1 > m_rsi_overbought && m_analysis.rsi_h4 > m_rsi_overbought)
+      // Block longs only if RSI EXTREMELY overbought on BOTH timeframes (raised from 70 to 80)
+      if(m_analysis.rsi_h1 > 80 && m_analysis.rsi_h4 > 80)
       {
-         LogPrint(">>> MOMENTUM REJECT: Long blocked - RSI overbought on H1 & H4");
+         LogPrint(">>> MOMENTUM REJECT: Long blocked - RSI extremely overbought on H1 & H4");
          return false;
       }
 
-      // Block longs if MACD strongly bearish and stochastic overbought
-      if(m_analysis.macd_histogram < -0.001 && m_analysis.stoch_main > m_stoch_overbought)
-      {
-         LogPrint(">>> MOMENTUM REJECT: Long blocked - MACD bearish + Stoch overbought");
-         return false;
-      }
+      // REMOVED: MACD+Stoch combo check was too aggressive
+      // Keep it simple - only block on extreme conditions
 
       LogPrint(">>> MOMENTUM PASSED: Long momentum OK");
       return true;
@@ -432,26 +428,21 @@ public:
                " | RSI H4=", DoubleToString(m_analysis.rsi_h4, 1),
                " | MACD=", DoubleToString(m_analysis.macd_histogram, 5));
 
-      // Block shorts if strong bullish momentum
-      if(m_analysis.momentum_score >= 40)
+      // Block shorts ONLY if VERY strong bullish momentum (raised threshold from 40 to 60)
+      if(m_analysis.momentum_score >= 60)
       {
-         LogPrint(">>> MOMENTUM REJECT: Short blocked - strong bullish momentum (", m_analysis.momentum_score, ")");
+         LogPrint(">>> MOMENTUM REJECT: Short blocked - very strong bullish momentum (", m_analysis.momentum_score, ")");
          return false;
       }
 
-      // Block shorts if both RSI timeframes are oversold
-      if(m_analysis.rsi_h1 < m_rsi_oversold && m_analysis.rsi_h4 < m_rsi_oversold)
+      // Block shorts only if RSI EXTREMELY oversold on BOTH timeframes (lowered from 30 to 20)
+      if(m_analysis.rsi_h1 < 20 && m_analysis.rsi_h4 < 20)
       {
-         LogPrint(">>> MOMENTUM REJECT: Short blocked - RSI oversold on H1 & H4");
+         LogPrint(">>> MOMENTUM REJECT: Short blocked - RSI extremely oversold on H1 & H4");
          return false;
       }
 
-      // Block shorts if MACD strongly bullish and stochastic oversold
-      if(m_analysis.macd_histogram > 0.001 && m_analysis.stoch_main < m_stoch_oversold)
-      {
-         LogPrint(">>> MOMENTUM REJECT: Short blocked - MACD bullish + Stoch oversold");
-         return false;
-      }
+      // REMOVED: MACD+Stoch combo check was too aggressive
 
       LogPrint(">>> MOMENTUM PASSED: Short momentum OK");
       return true;
