@@ -113,60 +113,40 @@ public:
                " | In Bearish OB=", analysis.in_bearish_ob ? "YES" : "NO");
       LogPrint(">>> SMC BOS: ", EnumToString(analysis.recent_bos));
 
-      // Block counter-SMC trades if enabled (lowered threshold from 50 to 30)
+      // Block counter-SMC trades if enabled
       if(m_smc_block_counter)
       {
-         // Block longs when SMC is bearish
-         if(signal == SIGNAL_LONG && analysis.smc_score <= -30)
+         // Only block on STRONG opposing bias (score <= -50 or >= 50)
+         if(signal == SIGNAL_LONG && analysis.smc_score <= -50)
          {
-            LogPrint(">>> SMC REJECT: Long blocked - bearish SMC bias (", analysis.smc_score, ")");
+            LogPrint(">>> SMC REJECT: Long blocked - strong bearish SMC bias (", analysis.smc_score, ")");
             return false;
          }
-         // Block shorts when SMC is bullish
-         if(signal == SIGNAL_SHORT && analysis.smc_score >= 30)
+         if(signal == SIGNAL_SHORT && analysis.smc_score >= 50)
          {
-            LogPrint(">>> SMC REJECT: Short blocked - bullish SMC bias (", analysis.smc_score, ")");
-            return false;
-         }
-
-         // Additional: Block longs if in bearish OB or bearish FVG
-         if(signal == SIGNAL_LONG && (analysis.in_bearish_ob || analysis.in_bearish_fvg))
-         {
-            LogPrint(">>> SMC REJECT: Long blocked - price in bearish supply zone");
-            return false;
-         }
-         // Additional: Block shorts if in bullish OB or bullish FVG
-         if(signal == SIGNAL_SHORT && (analysis.in_bullish_ob || analysis.in_bullish_fvg))
-         {
-            LogPrint(">>> SMC REJECT: Short blocked - price in bullish demand zone");
+            LogPrint(">>> SMC REJECT: Short blocked - strong bullish SMC bias (", analysis.smc_score, ")");
             return false;
          }
 
-         // Block trades against recent BOS/CHoCH
-         if(signal == SIGNAL_LONG && (analysis.recent_bos == BOS_BEARISH || analysis.recent_bos == CHOCH_BEARISH))
+         // Block trades directly in opposing zones (but only if also against BOS)
+         if(signal == SIGNAL_LONG && analysis.in_bearish_ob &&
+            (analysis.recent_bos == BOS_BEARISH || analysis.recent_bos == CHOCH_BEARISH))
          {
-            // Allow if we're in a bullish OB (potential reversal zone)
-            if(!analysis.in_bullish_ob && !analysis.in_bullish_fvg)
-            {
-               LogPrint(">>> SMC REJECT: Long blocked - recent bearish BOS/CHoCH without bullish zone support");
-               return false;
-            }
+            LogPrint(">>> SMC REJECT: Long blocked - in bearish OB with bearish structure");
+            return false;
          }
-         if(signal == SIGNAL_SHORT && (analysis.recent_bos == BOS_BULLISH || analysis.recent_bos == CHOCH_BULLISH))
+         if(signal == SIGNAL_SHORT && analysis.in_bullish_ob &&
+            (analysis.recent_bos == BOS_BULLISH || analysis.recent_bos == CHOCH_BULLISH))
          {
-            // Allow if we're in a bearish OB (potential reversal zone)
-            if(!analysis.in_bearish_ob && !analysis.in_bearish_fvg)
-            {
-               LogPrint(">>> SMC REJECT: Short blocked - recent bullish BOS/CHoCH without bearish zone support");
-               return false;
-            }
+            LogPrint(">>> SMC REJECT: Short blocked - in bullish OB with bullish structure");
+            return false;
          }
       }
 
-      // ACTUALLY REJECT trades below minimum confluence (not just warn)
-      if(confluence_score < m_smc_min_confluence)
+      // Only reject on very low confluence (below 40) - allow most trades through
+      if(confluence_score < 40)
       {
-         LogPrint(">>> SMC REJECT: Low confluence (", confluence_score, " < ", m_smc_min_confluence, ")");
+         LogPrint(">>> SMC REJECT: Very low confluence (", confluence_score, " < 40)");
          return false;
       }
 
