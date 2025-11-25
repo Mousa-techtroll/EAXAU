@@ -123,6 +123,8 @@ public:
          points += 2;
       else if (StringFind(pattern, "Range Box") >= 0)
           points += 2;
+      else if (StringFind(pattern, "Volatility Breakout") >= 0)
+         points += 2;
 
       // Determine quality tier
       if (points >= m_points_aplus) return SETUP_A_PLUS;

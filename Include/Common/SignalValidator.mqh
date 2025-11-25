@@ -189,6 +189,7 @@ public:
               pattern == PATTERN_ENGULFING ||
               pattern == PATTERN_PIN_BAR ||
               pattern == PATTERN_BREAKOUT_RETEST ||
+              pattern == PATTERN_VOLATILITY_BREAKOUT ||
               pattern == PATTERN_MA_CROSS_ANOMALY ||
               pattern == PATTERN_SR_BOUNCE);
    }
@@ -295,17 +296,24 @@ public:
             // Bull Market Context (Price > 200 EMA)
             if (current_bid > d1_ema_200)
             {
-               if (signal == SIGNAL_SHORT)
-               {
-                  double ct_adx_cap = MathMin(m_validation_strong_adx - 5.0, 32.0);
-                  bool macro_bearish = (macro_score <= -1);
-                  bool macro_strong_bear = (macro_score <= -m_validation_macro_strong);
-                  bool allow_short = false;
+            if (signal == SIGNAL_SHORT)
+            {
+               double ct_adx_cap = MathMin(m_validation_strong_adx - 5.0, 32.0);
+               bool macro_bearish = (macro_score <= -1);
+               bool macro_strong_bear = (macro_score <= -m_validation_macro_strong);
+               bool allow_short = false;
 
-                  if (current_adx > m_validation_strong_adx)
-                  {
-                     LogPrint("REJECT: Bull Trend too strong (ADX ", DoubleToString(current_adx,1), ") to short.");
-                     return false;
+               // Breakout exception: allow short if H4 bearish or macro bearish despite D1 bull
+               if (pattern_type == PATTERN_VOLATILITY_BREAKOUT && (h4 == TREND_BEARISH || macro_bearish))
+               {
+                  LogPrint(">>> ALLOW: Breakout short against 200 EMA (H4/macro bearish)");
+                  allow_short = true;
+               }
+
+               if (current_adx > m_validation_strong_adx)
+               {
+                  LogPrint("REJECT: Bull Trend too strong (ADX ", DoubleToString(current_adx,1), ") to short.");
+                  return false;
                   }
 
                   if (macro_strong_bear)
@@ -364,22 +372,29 @@ public:
                      return false;
                   }
 
-                  if (h4 == TREND_BULLISH || is_extreme_oversold || (IsMeanReversionPattern(pattern_type) && macro_score >= 1))
+                  if (pattern_type == PATTERN_VOLATILITY_BREAKOUT && (h4 == TREND_BULLISH || macro_score >= 1))
                   {
-                     LogPrint(">>> ALLOW: Long allowed against 200 EMA (H4 Bullish/RSI Oversold/MR + macro)");
-                  }
-                  else if (IsAsiaSession())
-                  {
-                     LogPrint(">>> ALLOW: Long allowed (Asia Session exception)");
-                  }
-                  else if (macro_score >= 2)
-                  {
-                     LogPrint(">>> ALLOW: Long allowed (Macro strongly bullish against D1 bear)");
+                     LogPrint(">>> ALLOW: Breakout long against 200 EMA (H4/macro bullish)");
                   }
                   else
                   {
-                     LogPrint("REJECT: Long against 200 EMA. No valid exception found.");
-                     return false;
+                     if (h4 == TREND_BULLISH || is_extreme_oversold || (IsMeanReversionPattern(pattern_type) && macro_score >= 1))
+                     {
+                        LogPrint(">>> ALLOW: Long allowed against 200 EMA (H4 Bullish/RSI Oversold/MR + macro)");
+                     }
+                     else if (IsAsiaSession())
+                     {
+                        LogPrint(">>> ALLOW: Long allowed (Asia Session exception)");
+                     }
+                     else if (macro_score >= 2)
+                     {
+                        LogPrint(">>> ALLOW: Long allowed (Macro strongly bullish against D1 bear)");
+                     }
+                     else
+                     {
+                        LogPrint("REJECT: Long against 200 EMA. No valid exception found.");
+                        return false;
+                     }
                   }
                }
             }

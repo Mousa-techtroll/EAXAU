@@ -30,6 +30,7 @@
 #include "Include/Components/SMCOrderBlocks.mqh"
 #include "Include/Components/MomentumFilter.mqh"
 #include "Include/Components/VolatilityRegimeManager.mqh"
+#include "Include/Components/VolatilityBreakout.mqh"
 
 // Include Core orchestration classes
 #include "Include/Core/MarketStateManager.mqh"
@@ -103,6 +104,24 @@ input double InpTP2Distance = 1.8;                    // TP2 distance (x risk) -
 input double InpTP1Volume = 50.0;                     // TP1 volume % to close
 input double InpTP2Volume = 40.0;                     // TP2 volume % to close
 input double InpBreakevenOffset = 50.0;               // Breakeven offset (points, ~$0.50 for Gold)
+
+input group "=== VOLATILITY BREAKOUT MODULE ==="
+input bool   InpEnableVolBreakout = true;             // Enable volatility breakout trend module
+input int    InpBODonchianPeriod = 20;                // Donchian lookback (H1)
+input int    InpBOKeltnerEMAPeriod = 20;              // Keltner EMA period (H1)
+input int    InpBOKeltnerATRPeriod = 20;              // Keltner ATR period (H1)
+input double InpBOKeltnerMult = 1.5;                  // Keltner ATR multiplier
+input double InpBOADXMin = 23.0;                      // Minimum ADX to allow breakout trades
+input double InpBOEntryBuffer = 20.0;                 // Entry buffer above/below bands (points)
+input double InpBOPullbackATRFrac = 0.5;              // Allow add-on when price retests within this ATR fraction
+input int    InpBOCooldownBars = 4;                   // Minimum bars between breakout/add signals
+input double InpBOTp1Distance = 2.0;                  // Breakout TP1 distance (x risk)
+input double InpBOTp2Distance = 3.2;                  // Breakout TP2 distance (x risk)
+input int    InpBOChandelierATR = 20;                 // ATR period for breakout Chandelier trailing
+input double InpBOChandelierMult = 2.8;               // ATR multiplier for breakout Chandelier trailing
+input int    InpBOChandelierLookback = 15;            // Lookback bars for breakout Chandelier (highest/lowest)
+input double InpBODailyLossStop = 1.5;                // Halt new breakout trades if daily PnL <= -X%
+input double InpBOMaxRiskPct = 1.1;                   // Cap per-trade risk % for breakout entries
 
 input group "=== SMC ORDER BLOCKS ==="
 input bool   InpEnableSMC = true;                     // Enable SMC Order Block Analysis
@@ -289,6 +308,7 @@ CSMCOrderBlocks *            g_smc_order_blocks;
 CMomentumFilter *            g_momentum_filter;
 CTrailingStopOptimizer *     g_trailing_optimizer;
 CVolatilityRegimeManager *   g_volatility_regime;
+CVolatilityBreakout *        g_volatility_breakout = NULL;
 
 // New modular components
 CSignalValidator *           g_signal_validator;
@@ -480,6 +500,17 @@ int OnInit()
             );
       }
 
+      // Configure trailing logic BEFORE initialization (so handles can be created)
+      if(InpEnableTrailOptimizer && g_trailing_optimizer != NULL)
+      {
+            g_position_manager.ConfigureTrailingOptimizer(g_trailing_optimizer, InpEnableTrailOptimizer);
+      }
+
+      if (InpEnableVolBreakout)
+      {
+            g_position_manager.ConfigureBreakoutTrailing(InpBOChandelierATR, InpBOChandelierMult, InpBOChandelierLookback);
+      }
+
       // Initialize all components
       if (!g_trend_detector.Init())
       {
@@ -523,12 +554,6 @@ int OnInit()
             return INIT_FAILED;
       }
 
-      // Configure Trailing Stop Optimizer for PositionManager
-      if(InpEnableTrailOptimizer && g_trailing_optimizer != NULL)
-      {
-            g_position_manager.ConfigureTrailingOptimizer(g_trailing_optimizer, InpEnableTrailOptimizer);
-      }
-
       // Initialize Adaptive TP Manager
       if(InpEnableAdaptiveTP && !g_adaptive_tp_manager.Init())
       {
@@ -561,6 +586,26 @@ int OnInit()
       if(InpEnableVolRegime && !g_volatility_regime.Init())
       {
             LogPrint("ERROR: VolatilityRegimeManager initialization failed");
+            return INIT_FAILED;
+      }
+
+      // Volatility Breakout Module
+      g_volatility_breakout = new CVolatilityBreakout(
+            InpBODonchianPeriod,
+            InpBOKeltnerEMAPeriod,
+            InpBOKeltnerATRPeriod,
+            InpBOKeltnerMult,
+            InpBOADXMin,
+            InpBOEntryBuffer,
+            InpBOPullbackATRFrac,
+            InpBOCooldownBars,
+            20,   // H4 fast EMA
+            50,   // H4 slow EMA
+            0.0   // slope buffer (flat filter)
+      );
+      if (InpEnableVolBreakout && !g_volatility_breakout.Init())
+      {
+            LogPrint("ERROR: VolatilityBreakout initialization failed");
             return INIT_FAILED;
       }
 
@@ -664,13 +709,22 @@ int OnInit()
                                                 InpEnableConfirmation,
                                                 // Short protection
                                                 InpBullMRShortAdxCap, InpBullMRShortMacroMax, InpShortRiskMultiplier,
-                                                InpShortTrendMinADX, InpShortTrendMaxADX, InpShortMRMacroMax);
+                                                InpShortTrendMinADX, InpShortTrendMaxADX, InpShortMRMacroMax,
+                                                InpBODailyLossStop, InpBOMaxRiskPct);
 
       // Configure Momentum Filter for SignalProcessor
       if(InpEnableMomentum && g_momentum_filter != NULL)
       {
             g_signal_processor.ConfigureMomentumFilter(g_momentum_filter, InpEnableMomentum);
       }
+
+      // Configure Volatility Breakout routing
+      g_signal_processor.ConfigureVolatilityBreakout(
+            g_volatility_breakout,
+            InpEnableVolBreakout,
+            InpBOTp1Distance,
+            InpBOTp2Distance
+      );
 
       LogPrint("Core orchestration classes initialized");
 
@@ -725,6 +779,7 @@ void OnDeinit(const int reason)
       delete g_momentum_filter;
       delete g_trailing_optimizer;
       delete g_volatility_regime;
+      delete g_volatility_breakout;
 
       // Cleanup new modular components
       delete g_signal_validator;

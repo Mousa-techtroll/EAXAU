@@ -18,6 +18,7 @@
 #include "../Management/RiskManager.mqh"
 #include "../Filters/MarketFilters.mqh"
 #include "../Components/MomentumFilter.mqh"
+#include "../Components/VolatilityBreakout.mqh"
 #include "RiskMonitor.mqh"
 #include "TradeOrchestrator.mqh"
 
@@ -40,12 +41,17 @@ private:
    CRiskMonitor*         m_risk_monitor;
    CTradeOrchestrator*   m_trade_orchestrator;
    CMomentumFilter*      m_momentum_filter;
+   CVolatilityBreakout*  m_vol_breakout;
 
    int                   m_handle_ma_200;
    int                   m_handle_adx_h1;
 
    // Momentum filter settings
    bool                  m_momentum_enabled;
+   bool                  m_breakout_enabled;
+   double                m_bo_tp1_mult;
+   double                m_bo_tp2_mult;
+   double                m_bo_max_risk_pct;
 
    // Session/Time filters
    bool                  m_trade_asia;
@@ -105,6 +111,8 @@ private:
    double                m_short_trend_max_adx;
    int                   m_short_mr_macro_max;
 
+   double                m_bo_daily_loss_stop;
+
 public:
    //+------------------------------------------------------------------+
    //| Constructor                                                       |
@@ -137,7 +145,8 @@ public:
                     bool enable_confirm,
                     // Short protection
                     double bull_mr_short_adx_cap, int bull_mr_short_macro_max, double short_risk_multiplier,
-                    double short_trend_min_adx, double short_trend_max_adx, int short_mr_macro_max)
+                    double short_trend_min_adx, double short_trend_max_adx, int short_mr_macro_max,
+                    double bo_daily_loss_stop = 1.5, double bo_max_risk_pct = 1.1)
    {
       m_trend_detector = trend;
       m_regime_classifier = regime;
@@ -197,10 +206,18 @@ public:
       m_short_trend_min_adx = short_trend_min_adx;
       m_short_trend_max_adx = short_trend_max_adx;
       m_short_mr_macro_max = short_mr_macro_max;
+      m_bo_daily_loss_stop = bo_daily_loss_stop;
+      m_bo_max_risk_pct = bo_max_risk_pct;
 
       // Default momentum to disabled
       m_momentum_filter = NULL;
       m_momentum_enabled = false;
+
+      // Default breakout module to disabled
+      m_vol_breakout = NULL;
+      m_breakout_enabled = false;
+      m_bo_tp1_mult = 2.5;
+      m_bo_tp2_mult = 4.0;
    }
 
    //+------------------------------------------------------------------+
@@ -213,6 +230,20 @@ public:
 
       if(m_momentum_enabled && m_momentum_filter != NULL)
          LogPrint("SignalProcessor: Momentum Filter ENABLED");
+   }
+
+   //+------------------------------------------------------------------+
+   //| Configure volatility breakout detector                           |
+   //+------------------------------------------------------------------+
+   void ConfigureVolatilityBreakout(CVolatilityBreakout* breakout, bool enabled, double tp1_mult, double tp2_mult)
+   {
+      m_vol_breakout = breakout;
+      m_breakout_enabled = enabled && (breakout != NULL);
+      m_bo_tp1_mult = tp1_mult;
+      m_bo_tp2_mult = tp2_mult;
+
+      if(m_breakout_enabled)
+         LogPrint("SignalProcessor: Volatility Breakout ENABLED (TP1 ", tp1_mult, "x, TP2 ", tp2_mult, "x)");
    }
 
    //+------------------------------------------------------------------+
@@ -253,6 +284,8 @@ public:
       ENUM_SIGNAL_TYPE pa_signal = SIGNAL_NONE;
       string pattern_name = "";
       ENUM_PATTERN_TYPE pattern_type = PATTERN_NONE;
+      bool breakout_used = false;
+      bool using_custom_prices = false;
 
       // Get current ATR to determine which patterns to try first
       double current_atr = m_price_action_lowvol.GetATR();
@@ -261,10 +294,38 @@ public:
       LogPrint("Daily: ", EnumToString(daily_trend), " | H4: ", EnumToString(h4_trend));
       LogPrint("Regime: ", EnumToString(regime), " | Macro: ", macro_score, " | ATR: ", current_atr);
 
-      // Strategy Selection: Check if ATR is within Mean Reversion range
-      bool try_mean_reversion = (current_atr > 0 && current_atr >= m_mr_min_atr && current_atr <= m_mr_max_atr);
+      // If market is trending/volatile with strong ADX, deprioritize mean reversion
+      bool high_trend_force = ((regime == REGIME_TRENDING || regime == REGIME_VOLATILE) && current_adx > 30.0);
 
-      if (try_mean_reversion)
+      // Fast-path: Volatility breakout module (trend continuation during expansion)
+      if (m_breakout_enabled && m_vol_breakout != NULL)
+      {
+         // Daily loss stop specific to breakout entries
+         double daily_pnl = m_risk_manager.GetDailyPnL();
+         if (daily_pnl <= -m_bo_daily_loss_stop)
+         {
+            LogPrint("BREAKOUT HALTED: Daily PnL ", DoubleToString(daily_pnl,2), "% <= -", m_bo_daily_loss_stop, "%");
+         }
+         else
+         {
+         SPriceActionData bo_signal;
+         if (m_vol_breakout.CheckBreakout(daily_trend, h4_trend, regime, current_adx, bo_signal))
+         {
+            signal_data = bo_signal;
+            pa_signal = bo_signal.signal;
+            pattern_name = bo_signal.pattern_name;
+            pattern_type = bo_signal.pattern_type;
+            breakout_used = true;
+            using_custom_prices = true;
+            LogPrint(">>> VOLATILITY BREAKOUT SIGNAL DETECTED: ", pattern_name);
+         }
+         }
+      }
+
+      // Strategy Selection: Check if ATR is within Mean Reversion range
+      bool try_mean_reversion = (current_atr > 0 && current_atr >= m_mr_min_atr && current_atr <= m_mr_max_atr && !high_trend_force);
+
+      if (!breakout_used && try_mean_reversion)
       {
          LogPrint(">>> ATR IN MEAN REVERSION RANGE (", m_mr_min_atr, "-", m_mr_max_atr, ") - Trying low vol patterns first...");
 
@@ -284,7 +345,7 @@ public:
             pattern_type = m_price_action.GetPatternType();
          }
       }
-      else
+      else if (!breakout_used)
       {
          // ATR outside mean reversion range: Use trend-following patterns
          LogPrint(">>> ATR OUTSIDE MR RANGE (ATR=", current_atr, " vs ", m_mr_min_atr, "-", m_mr_max_atr, ") - Using trend-following patterns");
@@ -479,17 +540,46 @@ public:
       // Determine risk with pattern-specific allocation
       double base_risk = m_trade_orchestrator.GetRiskForQuality(quality, pattern_name);
       double adjusted_risk = m_risk_manager.AdjustRiskForStreak(base_risk);
-      if (pa_signal == SIGNAL_SHORT && m_short_risk_multiplier > 0)
+      if (pa_signal == SIGNAL_SHORT && m_short_risk_multiplier > 0 && pattern_type != PATTERN_VOLATILITY_BREAKOUT)
       {
          adjusted_risk *= m_short_risk_multiplier;
          LogPrint(">>> Short risk bias applied: x", DoubleToString(m_short_risk_multiplier, 2),
                   " => ", adjusted_risk, "%");
       }
+      // Breakout-specific streak scaling
+      if (pattern_type == PATTERN_VOLATILITY_BREAKOUT)
+      {
+         int losses = m_risk_manager.GetConsecutiveLosses();
+         if (losses >= 4)
+         {
+            adjusted_risk *= 0.50;
+            LogPrint(">>> Breakout risk scaled to 50% after ", losses, " losses");
+         }
+         else if (losses >= 3)
+         {
+            adjusted_risk *= 0.70;
+            LogPrint(">>> Breakout risk scaled to 70% after ", losses, " losses");
+         }
+
+         // Cap breakout risk per trade
+         if (adjusted_risk > m_bo_max_risk_pct)
+         {
+            LogPrint(">>> Breakout risk capped to ", m_bo_max_risk_pct, "% (from ", adjusted_risk, "%)");
+            adjusted_risk = m_bo_max_risk_pct;
+         }
+      }
 
       // Calculate position size - use correct source based on pattern type
       double entry_price, stop_loss, take_profit;
 
-      if (m_signal_validator.IsMeanReversionPattern(pattern_type))
+      if (using_custom_prices && pattern_type == PATTERN_VOLATILITY_BREAKOUT)
+      {
+         entry_price = signal_data.entry_price;
+         stop_loss = signal_data.stop_loss;
+         take_profit = signal_data.take_profit;
+         LogPrint(">>> Using Volatility Breakout prices: Entry=", entry_price, " SL=", stop_loss, " TP seed=", take_profit);
+      }
+      else if (m_signal_validator.IsMeanReversionPattern(pattern_type))
       {
          // Mean reversion pattern was used
          SPriceActionData lowvol_data = m_price_action_lowvol.GetSignal();
@@ -628,8 +718,8 @@ public:
          // Trend-following: Use standard logic
          double stop_distance = MathAbs(entry_price - stop_loss);
 
-         double tp1_mult = m_tp1_distance;
-         double tp2_mult = m_tp2_distance;
+         double tp1_mult = (pattern_type == PATTERN_VOLATILITY_BREAKOUT) ? m_bo_tp1_mult : m_tp1_distance;
+         double tp2_mult = (pattern_type == PATTERN_VOLATILITY_BREAKOUT) ? m_bo_tp2_mult : m_tp2_distance;
 
          tp1 = (pa_signal == SIGNAL_LONG) ? entry_price + stop_distance * tp1_mult : entry_price - stop_distance * tp1_mult;
          tp2 = (pa_signal == SIGNAL_LONG) ? entry_price + stop_distance * tp2_mult : entry_price - stop_distance * tp2_mult;

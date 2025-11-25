@@ -21,12 +21,17 @@ private:
    CTrailingStopOptimizer* m_trailing_optimizer;  // Advanced trailing
    int                  m_handle_ma_h1;
    int                  m_handle_atr_trail;  // PERFORMANCE FIX: Cached ATR handle for trailing
+   int                  m_handle_atr_breakout;
 
    // Trailing stop configuration
    int                  m_atr_period_trail;
    double               m_atr_multiplier_trail;
    double               m_min_trail_movement;
    bool                 m_use_optimizer;  // Use advanced trailing optimizer
+   bool                 m_enable_breakout_trailing;
+   int                  m_breakout_chandelier_lookback;
+   int                  m_breakout_chandelier_atr_period;
+   double               m_breakout_chandelier_mult;
 
    // Auto-close configuration
    bool                 m_auto_close_choppy;
@@ -58,6 +63,11 @@ public:
       m_tp1_volume_pct = tp1_volume / 100.0;
       m_tp2_volume_pct = tp2_volume / 100.0;
       m_breakeven_offset_points = be_offset;  // RISK FIX: Configurable BE offset (default 50 points = $0.50)
+      m_enable_breakout_trailing = false;
+      m_breakout_chandelier_lookback = 20;
+      m_breakout_chandelier_atr_period = 20;
+      m_breakout_chandelier_mult = 3.0;
+      m_handle_atr_breakout = INVALID_HANDLE;
    }
 
    //+------------------------------------------------------------------+
@@ -70,6 +80,15 @@ public:
 
       if(m_use_optimizer && m_trailing_optimizer != NULL)
          LogPrint("PositionManager: Advanced Trailing Optimizer ENABLED");
+   }
+
+   void ConfigureBreakoutTrailing(int atr_period, double atr_mult, int lookback)
+   {
+      m_breakout_chandelier_atr_period = atr_period;
+      m_breakout_chandelier_mult = atr_mult;
+      m_breakout_chandelier_lookback = lookback;
+      m_enable_breakout_trailing = true;
+      LogPrint("PositionManager: Breakout Chandelier trailing ENABLED (ATR ", atr_period, ", x", atr_mult, ", lookback ", lookback, ")");
    }
    
    //+------------------------------------------------------------------+
@@ -95,6 +114,16 @@ public:
          return false;
       }
 
+      if (m_enable_breakout_trailing)
+      {
+         m_handle_atr_breakout = iATR(_Symbol, PERIOD_H1, m_breakout_chandelier_atr_period);
+         if (m_handle_atr_breakout == INVALID_HANDLE)
+         {
+            LogPrint("ERROR: Failed to create breakout ATR in PositionManager");
+            return false;
+         }
+      }
+
       LogPrint("PositionManager initialized successfully");
       return true;
    }
@@ -106,6 +135,8 @@ public:
    {
       IndicatorRelease(m_handle_ma_h1);
       IndicatorRelease(m_handle_atr_trail);
+      if (m_handle_atr_breakout != INVALID_HANDLE)
+         IndicatorRelease(m_handle_atr_breakout);
    }
    
    //+------------------------------------------------------------------+
@@ -208,8 +239,13 @@ public:
       // Step 3: Trail remaining position with ATR-based trailing stop
       if(position.tp1_closed)
       {
+         // Breakout trades use Chandelier/ATR trail
+         if(position.pattern_type == PATTERN_VOLATILITY_BREAKOUT && m_enable_breakout_trailing)
+         {
+            TrailWithChandelierBreakout(position, is_long);
+         }
          // Use advanced optimizer if enabled, otherwise fall back to basic ATR trailing
-         if(m_use_optimizer && m_trailing_optimizer != NULL)
+         else if(m_use_optimizer && m_trailing_optimizer != NULL)
          {
             TrailWithOptimizer(position, is_long);
          }
@@ -310,6 +346,56 @@ public:
       }
 
       // No need to release handle - using cached m_handle_atr_trail
+   }
+
+   //+------------------------------------------------------------------+
+   //| Chandelier/ATR trail for breakout positions                      |
+   //+------------------------------------------------------------------+
+   void TrailWithChandelierBreakout(SPosition &position, bool is_long)
+   {
+      if (!m_enable_breakout_trailing || m_handle_atr_breakout == INVALID_HANDLE)
+         return;
+
+      double atr_buf[];
+      ArraySetAsSeries(atr_buf, true);
+      if (CopyBuffer(m_handle_atr_breakout, 0, 0, 1, atr_buf) <= 0)
+         return;
+
+      double atr = atr_buf[0];
+      if (atr <= 0)
+         return;
+
+      int count = m_breakout_chandelier_lookback + 1;
+      double highs[], lows[];
+      ArraySetAsSeries(highs, true);
+      ArraySetAsSeries(lows, true);
+      if (CopyHigh(_Symbol, PERIOD_H1, 0, count, highs) < count ||
+          CopyLow(_Symbol, PERIOD_H1, 0, count, lows) < count)
+         return;
+
+      double anchor = highs[0];
+      double floor_val = lows[0];
+      for (int i = 0; i < m_breakout_chandelier_lookback; i++)
+      {
+         anchor = MathMax(anchor, highs[i]);
+         floor_val = MathMin(floor_val, lows[i]);
+      }
+
+      double new_sl = is_long ? (anchor - atr * m_breakout_chandelier_mult)
+                              : (floor_val + atr * m_breakout_chandelier_mult);
+
+      double current_sl = PositionGetDouble(POSITION_SL);
+      bool should_modify = false;
+      if (is_long && new_sl > current_sl && (new_sl - current_sl) >= m_min_trail_movement * _Point)
+         should_modify = true;
+      if (!is_long && (current_sl == 0.0 || new_sl < current_sl) && (current_sl == 0.0 || (current_sl - new_sl) >= m_min_trail_movement * _Point))
+         should_modify = true;
+
+      if (should_modify)
+      {
+         m_executor.ModifyStopLoss(position.ticket, NormalizePrice(new_sl));
+         LogPrint(">>> BREAKOUT CHANDELIER TRAIL: #", position.ticket, " SL -> ", DoubleToString(new_sl, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+      }
    }
    
    //+------------------------------------------------------------------+
