@@ -303,10 +303,10 @@ public:
                bool macro_strong_bear = (macro_score <= -m_validation_macro_strong);
                bool allow_short = false;
 
-               // Breakout exception: allow short if H4 bearish even if D1 is bullish
-               if (pattern_type == PATTERN_VOLATILITY_BREAKOUT && h4 == TREND_BEARISH)
+               // Breakout exception: allow short if H4 bearish when ADX is strong even above 200 EMA
+               if (pattern_type == PATTERN_VOLATILITY_BREAKOUT && h4 == TREND_BEARISH && (current_adx >= 26.0))
                {
-                  LogPrint(">>> ALLOW: Breakout short against 200 EMA (H4 bearish override)");
+                  LogPrint(">>> ALLOW: Breakout short against 200 EMA (H4 bearish + ADX>=26)");
                   allow_short = true;
                }
 
@@ -314,52 +314,52 @@ public:
                {
                   LogPrint("REJECT: Bull Trend too strong (ADX ", DoubleToString(current_adx,1), ") to short.");
                   return false;
-                  }
+               }
 
-                  if (macro_strong_bear)
+               if (macro_strong_bear)
+               {
+                  LogPrint(">>> ALLOW: Short allowed (Macro strongly bearish overrides D1 bull)");
+                  allow_short = true;
+               }
+               else if (IsMeanReversionPattern(pattern_type) && current_adx <= ct_adx_cap)
+               {
+                  if (macro_bearish || h4 == TREND_BEARISH)
                   {
-                     LogPrint(">>> ALLOW: Short allowed (Macro strongly bearish overrides D1 bull)");
+                     LogPrint(">>> ALLOW: MR short with bearish macro/H4 + low ADX against 200 EMA");
                      allow_short = true;
                   }
-                  else if (IsMeanReversionPattern(pattern_type) && current_adx <= ct_adx_cap)
+                  else if (IsAsiaSession() && is_extreme_overbought)
                   {
-                     if (macro_bearish || h4 == TREND_BEARISH)
-                     {
-                        LogPrint(">>> ALLOW: MR short with bearish macro/H4 + low ADX against 200 EMA");
-                        allow_short = true;
-                     }
-                     else if (IsAsiaSession() && is_extreme_overbought)
-                     {
-                        LogPrint(">>> ALLOW: Asia MR short with RSI extreme and low ADX");
-                        allow_short = true;
-                     }
-                  }
-
-                  if (!allow_short)
-                  {
-                     if (h4 == TREND_BEARISH && current_adx <= m_validation_strong_adx)
-                     {
-                        LogPrint(">>> ALLOW: Short allowed (H4 is Bearish against D1 Bull with controlled ADX)");
-                        allow_short = true;
-                     }
-                     else if (is_extreme_overbought && current_adx <= m_validation_strong_adx)
-                     {
-                        LogPrint(">>> ALLOW: Short allowed (RSI Extreme ", DoubleToString(current_rsi,1), " > ", m_rsi_overbought, ")");
-                        allow_short = true;
-                     }
-                     else if (IsAsiaSession() && current_adx <= ct_adx_cap && macro_score <= 1)
-                     {
-                        LogPrint(">>> ALLOW: Short allowed (Asia Session exception with low ADX)");
-                        allow_short = true;
-                     }
-                  }
-
-                  if (!allow_short)
-                  {
-                     LogPrint("REJECT: Short against 200 EMA. No valid exception found.");
-                     return false;
+                     LogPrint(">>> ALLOW: Asia MR short with RSI extreme and low ADX");
+                     allow_short = true;
                   }
                }
+
+               if (!allow_short)
+               {
+                  if (h4 == TREND_BEARISH && current_adx <= m_validation_strong_adx)
+                  {
+                     LogPrint(">>> ALLOW: Short allowed (H4 is Bearish against D1 Bull with controlled ADX)");
+                     allow_short = true;
+                  }
+                  else if (is_extreme_overbought && current_adx <= m_validation_strong_adx)
+                  {
+                     LogPrint(">>> ALLOW: Short allowed (RSI Extreme ", DoubleToString(current_rsi,1), " > ", m_rsi_overbought, ")");
+                     allow_short = true;
+                  }
+                  else if (IsAsiaSession() && current_adx <= ct_adx_cap && macro_score <= 1)
+                  {
+                     LogPrint(">>> ALLOW: Short allowed (Asia Session exception with low ADX)");
+                     allow_short = true;
+                  }
+               }
+
+               if (!allow_short)
+               {
+                  LogPrint("REJECT: Short against 200 EMA. No valid exception found.");
+                  return false;
+               }
+            }
             }
             // Bear Market Context (Price < 200 EMA)
             else if (current_bid < d1_ema_200)
@@ -397,9 +397,42 @@ public:
                      }
                   }
                }
+               else if (signal == SIGNAL_SHORT)
+               {
+                  // Below 200 EMA: allow shorts with lighter macro requirement
+                  bool allow_short = false;
+
+                  if (pattern_type == PATTERN_VOLATILITY_BREAKOUT && h4 == TREND_BEARISH)
+                  {
+                     LogPrint(">>> ALLOW: Breakout short below 200 EMA (H4 bearish)");
+                     allow_short = true;
+                  }
+                  else if (IsMeanReversionPattern(pattern_type))
+                  {
+                     if (current_adx <= m_validation_strong_adx && macro_score <= 0)
+                     {
+                        LogPrint(">>> ALLOW: MR short below 200 EMA (macro<=0, ADX within cap)");
+                        allow_short = true;
+                     }
+                  }
+                  else
+                  {
+                     // Trend shorts: require H4 bearish or macro <= -1 and ADX not extreme
+                     if ((h4 == TREND_BEARISH || macro_score <= -1) && current_adx <= m_validation_strong_adx)
+                     {
+                        allow_short = true;
+                     }
+                  }
+
+                  if (!allow_short)
+                  {
+                     LogPrint("REJECT: Short below 200 EMA did not meet relaxed conditions");
+                     return false;
+                  }
+               }
             }
-         }
-      }
+        }
+     }
 
       // Trend Alignment Check
       if (daily != TREND_NEUTRAL && h4 != TREND_NEUTRAL && daily != h4)
