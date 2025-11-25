@@ -405,6 +405,30 @@ public:
 
       LogPrint(">>> VALIDATION PASSED - Proceeding with trade");
 
+      // SMC Order Block Validation
+      if (m_signal_validator.IsSMCEnabled())
+      {
+         double smc_entry = (pa_signal == SIGNAL_LONG) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         double smc_sl = 0;
+         if (m_signal_validator.IsMeanReversionPattern(pattern_type))
+         {
+            SPriceActionData lowvol_data = m_price_action_lowvol.GetSignal();
+            smc_sl = lowvol_data.stop_loss;
+         }
+         else
+         {
+            smc_sl = m_price_action.GetStopLoss();
+         }
+
+         int smc_confluence = 0;
+         if (!m_signal_validator.ValidateSMCConditions(pa_signal, smc_entry, smc_sl, smc_confluence))
+         {
+            LogPrint(">>> SMC VALIDATION FAILED - Trade rejected");
+            return;
+         }
+         LogPrint(">>> SMC VALIDATION PASSED - Confluence Score: ", smc_confluence);
+      }
+
       // Evaluate setup quality
       ENUM_SETUP_QUALITY quality = m_setup_evaluator.EvaluateSetupQuality(daily_trend, h4_trend, regime, macro_score, pattern_name);
 
@@ -752,6 +776,19 @@ public:
             LogPrint("CONFIRMATION REJECT: Confidence ", confidence, " < ", m_min_pattern_confidence);
             return false;
          }
+      }
+
+      // SMC validation on confirmation
+      if (m_signal_validator.IsSMCEnabled())
+      {
+         double smc_entry = (pending.signal_type == SIGNAL_LONG) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         int smc_confluence = 0;
+         if (!m_signal_validator.ValidateSMCConditions(pending.signal_type, smc_entry, pending.stop_loss, smc_confluence))
+         {
+            LogPrint("CONFIRMATION REJECT: SMC validation failed");
+            return false;
+         }
+         LogPrint("CONFIRMATION: SMC validation passed (confluence: ", smc_confluence, ")");
       }
 
       return true;

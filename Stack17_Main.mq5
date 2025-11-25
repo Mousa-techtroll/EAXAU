@@ -26,6 +26,7 @@
 #include "Include/Management/SignalManager.mqh"
 #include "Include/Management/AdaptiveTPManager.mqh"
 #include "Include/Filters/MarketFilters.mqh"
+#include "Include/Components/SMCOrderBlocks.mqh"
 
 // Include Core orchestration classes
 #include "Include/Core/MarketStateManager.mqh"
@@ -99,6 +100,20 @@ input double InpTP2Distance = 1.8;                    // TP2 distance (x risk) -
 input double InpTP1Volume = 50.0;                     // TP1 volume % to close
 input double InpTP2Volume = 40.0;                     // TP2 volume % to close
 input double InpBreakevenOffset = 50.0;               // Breakeven offset (points, ~$0.50 for Gold)
+
+input group "=== SMC ORDER BLOCKS ==="
+input bool   InpEnableSMC = true;                     // Enable SMC Order Block Analysis
+input int    InpSMCOBLookback = 50;                   // OB Detection Lookback (bars)
+input double InpSMCOBBodyPct = 0.5;                   // OB Min Body % (0.0-1.0)
+input double InpSMCOBImpulseMult = 1.5;               // OB Impulse ATR Multiplier
+input int    InpSMCFVGMinPoints = 50;                 // FVG Min Gap (points)
+input int    InpSMCBOSLookback = 20;                  // BOS Swing Detection Lookback
+input double InpSMCLiqTolerance = 30.0;               // Liquidity Equal Tolerance (points)
+input int    InpSMCLiqMinTouches = 2;                 // Liquidity Min Touches
+input int    InpSMCZoneMaxAge = 200;                  // Zone Max Age (bars)
+input bool   InpSMCUseHTFConfluence = true;           // Require HTF Confluence
+input int    InpSMCMinConfluence = 60;                // Min SMC Confluence Score to Trade (0-100)
+input bool   InpSMCBlockCounterSMC = true;            // Block trades against SMC bias
 
 input group "=== ADAPTIVE TAKE PROFIT SYSTEM ==="
 input bool   InpEnableAdaptiveTP = true;              // Enable Adaptive TP System
@@ -223,6 +238,7 @@ CRiskManager *               g_risk_manager;
 CTradeExecutor *             g_trade_executor;
 CPositionManager *           g_position_manager;
 CAdaptiveTPManager *         g_adaptive_tp_manager;
+CSMCOrderBlocks *            g_smc_order_blocks;
 
 // New modular components
 CSignalValidator *           g_signal_validator;
@@ -274,6 +290,12 @@ int OnInit()
             LogPrint("  Normal Vol TPs: ", InpNormalVolTP1Mult, "x / ", InpNormalVolTP2Mult, "x");
             LogPrint("  High Vol TPs: ", InpHighVolTP1Mult, "x / ", InpHighVolTP2Mult, "x");
             LogPrint("  Structure Targets: ", InpUseStructureTargets ? "ON" : "OFF");
+      }
+      LogPrint("SMC Order Blocks: ", InpEnableSMC ? "ENABLED" : "DISABLED");
+      if (InpEnableSMC)
+      {
+            LogPrint("  OB Lookback: ", InpSMCOBLookback, " bars | Impulse Mult: ", InpSMCOBImpulseMult, "x");
+            LogPrint("  Min Confluence: ", InpSMCMinConfluence, "/100 | Block Counter-SMC: ", InpSMCBlockCounterSMC ? "ON" : "OFF");
       }
       if (InpEnableHybridLogic) // Simplified check
       {
@@ -338,6 +360,17 @@ int OnInit()
             );
       }
 
+      // Create SMC Order Blocks Module
+      g_smc_order_blocks = new CSMCOrderBlocks();
+      if(InpEnableSMC)
+      {
+            g_smc_order_blocks.Configure(
+                  InpSMCOBLookback, InpSMCOBBodyPct, InpSMCOBImpulseMult,
+                  InpSMCFVGMinPoints, InpSMCBOSLookback, InpSMCLiqTolerance,
+                  InpSMCLiqMinTouches, InpSMCZoneMaxAge, InpSMCUseHTFConfluence
+            );
+      }
+
       // Initialize all components
       if (!g_trend_detector.Init())
       {
@@ -388,6 +421,13 @@ int OnInit()
             return INIT_FAILED;
       }
 
+      // Initialize SMC Order Blocks Module
+      if(InpEnableSMC && !g_smc_order_blocks.Init())
+      {
+            LogPrint("ERROR: SMCOrderBlocks initialization failed");
+            return INIT_FAILED;
+      }
+
       // PERFORMANCE FIX: Initialize H1 ADX handle for filter (DI+ and DI- access)
       g_handle_adx_h1 = iADX(_Symbol, PERIOD_H1, 14);
       if (g_handle_adx_h1 == INVALID_HANDLE)
@@ -410,6 +450,13 @@ int OnInit()
                                                 g_handle_ma_200, InpUseH4AsPrimary, InpUseDaily200EMA,
                                                 Inp200EMA_RSI_Overbought, Inp200EMA_RSI_Oversold,
                                                 InpValidationStrongADX, InpValidationMacroStrong);
+
+      // Configure SMC integration with SignalValidator
+      if(InpEnableSMC && g_smc_order_blocks != NULL)
+      {
+            g_signal_validator.ConfigureSMC(g_smc_order_blocks, InpEnableSMC,
+                                            InpSMCMinConfluence, InpSMCBlockCounterSMC);
+      }
 
       g_setup_evaluator = new CSetupEvaluator(g_trend_detector, g_price_action, g_price_action_lowvol,
                                               InpRiskAPlusSetup, InpRiskASetup, InpRiskBPlusSetup, InpRiskBSetup,
@@ -531,6 +578,7 @@ void OnDeinit(const int reason)
       delete g_trade_executor;
       delete g_position_manager;
       delete g_adaptive_tp_manager;
+      delete g_smc_order_blocks;
 
       // Cleanup new modular components
       delete g_signal_validator;
@@ -599,6 +647,10 @@ void OnTick()
             // FULL ANALYSIS ON NEW BAR - Use Core orchestrators
             if (g_market_state_manager != NULL)
                   g_market_state_manager.UpdateMarketState();
+
+            // Update SMC Order Block zones
+            if (InpEnableSMC && g_smc_order_blocks != NULL)
+                  g_smc_order_blocks.Update();
 
             if (g_signal_processor != NULL)
                   g_signal_processor.CheckForNewSignals();

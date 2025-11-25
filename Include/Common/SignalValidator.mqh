@@ -12,6 +12,7 @@
 #include "../Components/RegimeClassifier.mqh"
 #include "../Components/PriceAction.mqh"
 #include "../Components/PriceActionLowVol.mqh"
+#include "../Components/SMCOrderBlocks.mqh"
 
 //+------------------------------------------------------------------+
 //| CSignalValidator - Validates trading signals and conditions      |
@@ -24,6 +25,7 @@ private:
    CRegimeClassifier*   m_regime_classifier;
    CPriceAction*        m_price_action;
    CPriceActionLowVol*  m_price_action_lowvol;
+   CSMCOrderBlocks*     m_smc_order_blocks;
 
    // Indicator handles
    int                  m_handle_ma_200;
@@ -35,6 +37,11 @@ private:
    double               m_rsi_oversold;
    double               m_validation_strong_adx;
    int                  m_validation_macro_strong;
+
+   // SMC Configuration
+   bool                 m_smc_enabled;
+   int                  m_smc_min_confluence;
+   bool                 m_smc_block_counter;
 
 public:
    //+------------------------------------------------------------------+
@@ -56,7 +63,96 @@ public:
       m_rsi_oversold = rsi_os;
       m_validation_strong_adx = strong_adx;
       m_validation_macro_strong = macro_strong;
+
+      // SMC defaults (disabled until configured)
+      m_smc_order_blocks = NULL;
+      m_smc_enabled = false;
+      m_smc_min_confluence = 60;
+      m_smc_block_counter = true;
    }
+
+   //+------------------------------------------------------------------+
+   //| Configure SMC Order Blocks integration                            |
+   //+------------------------------------------------------------------+
+   void ConfigureSMC(CSMCOrderBlocks* smc, bool enabled, int min_confluence, bool block_counter)
+   {
+      m_smc_order_blocks = smc;
+      m_smc_enabled = enabled;
+      m_smc_min_confluence = min_confluence;
+      m_smc_block_counter = block_counter;
+
+      if(m_smc_enabled && m_smc_order_blocks != NULL)
+         LogPrint("SignalValidator: SMC integration ENABLED (min confluence: ", min_confluence, ")");
+   }
+
+   //+------------------------------------------------------------------+
+   //| Validate SMC conditions for entry                                 |
+   //+------------------------------------------------------------------+
+   bool ValidateSMCConditions(ENUM_SIGNAL_TYPE signal, double entry_price, double stop_loss, int &confluence_score)
+   {
+      if(!m_smc_enabled || m_smc_order_blocks == NULL)
+      {
+         confluence_score = 50;  // Neutral score when SMC disabled
+         return true;  // Pass if SMC not enabled
+      }
+
+      // Get confluence score
+      confluence_score = m_smc_order_blocks.GetConfluenceScore(signal, entry_price);
+
+      // Check if entry is supported by SMC
+      bool smc_supports = false;
+      if(signal == SIGNAL_LONG)
+         smc_supports = m_smc_order_blocks.SupportsLongEntry(entry_price, stop_loss);
+      else if(signal == SIGNAL_SHORT)
+         smc_supports = m_smc_order_blocks.SupportsShortEntry(entry_price, stop_loss);
+
+      // Log SMC analysis
+      SSMCAnalysis analysis = m_smc_order_blocks.GetAnalysis();
+      LogPrint(">>> SMC Analysis: Score=", analysis.smc_score, " | Confluence=", confluence_score);
+      LogPrint(">>> SMC Zones: In Bullish OB=", analysis.in_bullish_ob ? "YES" : "NO",
+               " | In Bearish OB=", analysis.in_bearish_ob ? "YES" : "NO");
+      LogPrint(">>> SMC BOS: ", EnumToString(analysis.recent_bos));
+
+      // Block counter-SMC trades if enabled
+      if(m_smc_block_counter)
+      {
+         if(signal == SIGNAL_LONG && analysis.smc_score <= -50)
+         {
+            LogPrint(">>> SMC REJECT: Long blocked - strong bearish SMC bias (", analysis.smc_score, ")");
+            return false;
+         }
+         if(signal == SIGNAL_SHORT && analysis.smc_score >= 50)
+         {
+            LogPrint(">>> SMC REJECT: Short blocked - strong bullish SMC bias (", analysis.smc_score, ")");
+            return false;
+         }
+      }
+
+      // Check minimum confluence
+      if(confluence_score < m_smc_min_confluence)
+      {
+         LogPrint(">>> SMC WARNING: Low confluence (", confluence_score, " < ", m_smc_min_confluence, ")");
+         // Don't reject, but signal quality scoring will be affected
+      }
+
+      return true;
+   }
+
+   //+------------------------------------------------------------------+
+   //| Get SMC confluence score for current conditions                   |
+   //+------------------------------------------------------------------+
+   int GetSMCConfluenceScore(ENUM_SIGNAL_TYPE signal, double entry_price)
+   {
+      if(!m_smc_enabled || m_smc_order_blocks == NULL)
+         return 50;  // Neutral score
+
+      return m_smc_order_blocks.GetConfluenceScore(signal, entry_price);
+   }
+
+   //+------------------------------------------------------------------+
+   //| Check if SMC is enabled                                           |
+   //+------------------------------------------------------------------+
+   bool IsSMCEnabled() { return m_smc_enabled && m_smc_order_blocks != NULL; }
 
    //+------------------------------------------------------------------+
    //| Check if pattern is mean reversion type                          |
