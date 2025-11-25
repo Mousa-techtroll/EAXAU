@@ -303,10 +303,10 @@ public:
                bool macro_strong_bear = (macro_score <= -m_validation_macro_strong);
                bool allow_short = false;
 
-               // Breakout exception: allow short if H4 bearish or macro bearish despite D1 bull
-               if (pattern_type == PATTERN_VOLATILITY_BREAKOUT && (h4 == TREND_BEARISH || macro_bearish))
+               // Breakout exception: allow short if H4 bearish even if D1 is bullish
+               if (pattern_type == PATTERN_VOLATILITY_BREAKOUT && h4 == TREND_BEARISH)
                {
-                  LogPrint(">>> ALLOW: Breakout short against 200 EMA (H4/macro bearish)");
+                  LogPrint(">>> ALLOW: Breakout short against 200 EMA (H4 bearish override)");
                   allow_short = true;
                }
 
@@ -323,9 +323,9 @@ public:
                   }
                   else if (IsMeanReversionPattern(pattern_type) && current_adx <= ct_adx_cap)
                   {
-                     if (macro_bearish)
+                     if (macro_bearish || h4 == TREND_BEARISH)
                      {
-                        LogPrint(">>> ALLOW: MR short with bearish macro + low ADX against 200 EMA");
+                        LogPrint(">>> ALLOW: MR short with bearish macro/H4 + low ADX against 200 EMA");
                         allow_short = true;
                      }
                      else if (IsAsiaSession() && is_extreme_overbought)
@@ -378,7 +378,7 @@ public:
                   }
                   else
                   {
-                     if (h4 == TREND_BULLISH || is_extreme_oversold || (IsMeanReversionPattern(pattern_type) && macro_score >= 1))
+                     if (h4 == TREND_BULLISH || is_extreme_oversold || (IsMeanReversionPattern(pattern_type) && macro_score >= 0))
                      {
                         LogPrint(">>> ALLOW: Long allowed against 200 EMA (H4 Bullish/RSI Oversold/MR + macro)");
                      }

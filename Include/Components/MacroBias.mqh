@@ -22,6 +22,9 @@ private:
    
    // Indicator handles
    int                  m_handle_dxy_ma50;
+   int                  m_handle_price_d1_ema200;
+   int                  m_handle_price_h4_fast;
+   int                  m_handle_price_h4_slow;
    
    // Macro data
    SMacroBiasData       m_macro_data;
@@ -42,6 +45,9 @@ public:
       
       m_dxy_available = false;
       m_vix_available = false;
+      m_handle_price_d1_ema200 = INVALID_HANDLE;
+      m_handle_price_h4_fast = INVALID_HANDLE;
+      m_handle_price_h4_slow = INVALID_HANDLE;
    }
    
    //+------------------------------------------------------------------+
@@ -51,6 +57,12 @@ public:
    {
       if(m_dxy_available)
          IndicatorRelease(m_handle_dxy_ma50);
+      if(m_handle_price_d1_ema200 != INVALID_HANDLE)
+         IndicatorRelease(m_handle_price_d1_ema200);
+      if(m_handle_price_h4_fast != INVALID_HANDLE)
+         IndicatorRelease(m_handle_price_h4_fast);
+      if(m_handle_price_h4_slow != INVALID_HANDLE)
+         IndicatorRelease(m_handle_price_h4_slow);
    }
    
    //+------------------------------------------------------------------+
@@ -81,6 +93,14 @@ public:
       {
          LogPrint("INFO: VIX symbol not available. Will operate without VIX data.");
       }
+      // Price-based fallback handles (for when DXY/VIX unavailable)
+      m_handle_price_d1_ema200 = iMA(_Symbol, PERIOD_D1, 200, 0, MODE_EMA, PRICE_CLOSE);
+      m_handle_price_h4_fast = iMA(_Symbol, PERIOD_H4, 20, 0, MODE_EMA, PRICE_CLOSE);
+      m_handle_price_h4_slow = iMA(_Symbol, PERIOD_H4, 50, 0, MODE_EMA, PRICE_CLOSE);
+      if(m_handle_price_d1_ema200 == INVALID_HANDLE || m_handle_price_h4_fast == INVALID_HANDLE || m_handle_price_h4_slow == INVALID_HANDLE)
+      {
+         LogPrint("WARNING: Price-based macro fallback handles failed to create");
+      }
       
       // Initialize bias as neutral
       m_macro_data.bias = BIAS_NEUTRAL;
@@ -104,6 +124,12 @@ public:
       // Update VIX analysis
       if(m_vix_available)
          score += AnalyzeVIX();
+      else
+         LogPrint("INFO: VIX unavailable - skipping VIX component");
+
+      // Fallback: price-based macro when no external data
+      if(!m_dxy_available && !m_vix_available)
+         score += AnalyzePriceFallback();
       
       // Store score
       m_macro_data.bias_score = score;
@@ -213,5 +239,43 @@ private:
          return -1;
       
       return 0;
+   }
+
+   //+------------------------------------------------------------------+
+   //| Price-based fallback macro score (when DXY/VIX missing)         |
+   //+------------------------------------------------------------------+
+   int AnalyzePriceFallback()
+   {
+      if (m_handle_price_d1_ema200 == INVALID_HANDLE || m_handle_price_h4_fast == INVALID_HANDLE || m_handle_price_h4_slow == INVALID_HANDLE)
+         return 0;
+
+      double ema200_d1[], ema_fast[], ema_slow[];
+      ArraySetAsSeries(ema200_d1, true);
+      ArraySetAsSeries(ema_fast, true);
+      ArraySetAsSeries(ema_slow, true);
+
+      if (CopyBuffer(m_handle_price_d1_ema200, 0, 0, 1, ema200_d1) <= 0 ||
+          CopyBuffer(m_handle_price_h4_fast, 0, 0, 2, ema_fast) < 2 ||
+          CopyBuffer(m_handle_price_h4_slow, 0, 0, 2, ema_slow) < 2)
+         return 0;
+
+      double current_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      bool above_200 = current_price > ema200_d1[0];
+      bool h4_up = ema_fast[0] > ema_slow[0] && ema_fast[0] > ema_fast[1];
+      bool h4_down = ema_fast[0] < ema_slow[0] && ema_fast[0] < ema_fast[1];
+
+      int price_score = 0;
+      if (above_200 && h4_up)
+         price_score += 2;
+      else if (!above_200 && h4_down)
+         price_score -= 2;
+      else if (above_200)
+         price_score += 1;
+      else
+         price_score -= 1;
+
+      LogPrint("Price-based macro fallback: price ", (above_200 ? "above" : "below"), " D1 200 | H4 slope ",
+               h4_up ? "UP" : h4_down ? "DOWN" : "FLAT", " => score ", price_score);
+      return price_score;
    }
 };

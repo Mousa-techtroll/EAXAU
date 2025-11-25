@@ -46,8 +46,8 @@
 input string InpVersion = "4.6";                          // EA Version
 
 input group "=== RISK MANAGEMENT ==="
-input double InpRiskAPlusSetup = 1.8;                 // Risk % for A+ setups
-input double InpRiskASetup = 1.5;                     // Risk % for A setups
+input double InpRiskAPlusSetup = 1.4;                 // Risk % for A+ setups
+input double InpRiskASetup = 1.2;                     // Risk % for A setups
 input double InpRiskBPlusSetup = 1.2;                 // Risk % for B+ setups
 input double InpRiskBSetup = 1.0;                     // Risk % for B setups
 input double InpMaxTotalExposure = 5.0;               // Maximum total exposure %
@@ -62,12 +62,12 @@ input int InpWeekendCloseHour = 20;                   // Hour to close positions
 input int InpMaxTradesPerDay = 5;                     // Max trades per day (0 = unlimited)
 
 input group "=== SHORT PROTECTION ==="
-input double InpShortRiskMultiplier = 0.35;           // Risk multiplier for all short trades (cuts drawdown when gold trends up)
+input double InpShortRiskMultiplier = 1.0;            // Risk multiplier for all short trades (cuts drawdown when gold trends up)
 input double InpBullMRShortAdxCap = 30.0;             // Max ADX to allow MR shorts above D1 200 EMA
 input int    InpBullMRShortMacroMax = -1;             // Max macro bias to allow MR shorts above D1 200 EMA (<=-1 = bearish required)
 input double InpShortTrendMinADX = 18.0;              // Min ADX to allow trend shorts (avoid chop)
 input double InpShortTrendMaxADX = 60.0;              // Max ADX to allow trend shorts (avoid exhaustion)
-input int    InpShortMRMacroMax = -2;                 // Max macro bias to allow MR shorts (needs clear bearish)
+input int    InpShortMRMacroMax = -1;                 // Max macro bias to allow MR shorts (needs clear bearish)
 
 input group "=== CONSECUTIVE LOSS PROTECTION ==="
 input bool InpEnableLossScaling = true;               // Enable risk scaling after losses
@@ -107,11 +107,11 @@ input double InpBreakevenOffset = 50.0;               // Breakeven offset (point
 
 input group "=== VOLATILITY BREAKOUT MODULE ==="
 input bool   InpEnableVolBreakout = true;             // Enable volatility breakout trend module
-input int    InpBODonchianPeriod = 20;                // Donchian lookback (H1)
+input int    InpBODonchianPeriod = 14;                // Donchian lookback (H1)
 input int    InpBOKeltnerEMAPeriod = 20;              // Keltner EMA period (H1)
 input int    InpBOKeltnerATRPeriod = 20;              // Keltner ATR period (H1)
 input double InpBOKeltnerMult = 1.5;                  // Keltner ATR multiplier
-input double InpBOADXMin = 23.0;                      // Minimum ADX to allow breakout trades
+input double InpBOADXMin = 26.0;                      // Minimum ADX to allow breakout trades
 input double InpBOEntryBuffer = 15.0;                 // Entry buffer above/below bands (points)
 input double InpBOPullbackATRFrac = 0.5;              // Allow add-on when price retests within this ATR fraction
 input int    InpBOCooldownBars = 4;                   // Minimum bars between breakout/add signals
@@ -121,7 +121,7 @@ input int    InpBOChandelierATR = 20;                 // ATR period for breakout
 input double InpBOChandelierMult = 2.6;               // ATR multiplier for breakout Chandelier trailing
 input int    InpBOChandelierLookback = 15;            // Lookback bars for breakout Chandelier (highest/lowest)
 input double InpBODailyLossStop = 0.8;                // Halt new breakout trades if daily PnL <= -X%
-input double InpBOMaxRiskPct = 0.8;                   // Cap per-trade risk % for breakout entries
+input double InpBOMaxRiskPct = 0.6;                   // Cap per-trade risk % for breakout entries
 
 input group "=== SMC ORDER BLOCKS ==="
 input bool   InpEnableSMC = true;                     // Enable SMC Order Block Analysis
