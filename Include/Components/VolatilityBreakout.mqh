@@ -23,6 +23,7 @@ private:
    double   m_entry_buffer_pts;
    double   m_pullback_atr_frac;
    int      m_cooldown_bars;
+   bool     m_allow_adds;
    int      m_h4_fast_period;
    int      m_h4_slow_period;
    double   m_slope_buffer;
@@ -48,7 +49,8 @@ public:
                        int cooldown_bars = 4,
                        int h4_fast = 20,
                        int h4_slow = 50,
-                       double slope_buffer = 0.0)
+                       double slope_buffer = 0.0,
+                       bool allow_adds = true)
    {
       m_donchian_period = donchian_period;
       m_keltner_ema_period = keltner_ema_period;
@@ -58,6 +60,7 @@ public:
       m_entry_buffer_pts = entry_buffer_pts;
       m_pullback_atr_frac = pullback_atr_frac;
       m_cooldown_bars = cooldown_bars;
+      m_allow_adds = allow_adds;
       m_h4_fast_period = h4_fast;
       m_h4_slow_period = h4_slow;
       m_slope_buffer = slope_buffer;
@@ -167,7 +170,8 @@ public:
          bool cooldown_ok = (m_last_long_signal == 0) || (TimeCurrent() - m_last_long_signal >= cooldown_seconds);
          bool is_break = (last_close > (donchian_high + m_entry_buffer_pts * _Point)) ||
                          (last_close > (upper_k + m_entry_buffer_pts * _Point));
-         bool is_pullback_add = (m_last_long_break > 0.0) &&
+         bool is_pullback_add = m_allow_adds &&
+                                (m_last_long_break > 0.0) &&
                                 (MathAbs(last_close - m_last_long_break) <= last_atr * m_pullback_atr_frac) &&
                                 cooldown_ok;
 
@@ -202,7 +206,8 @@ public:
          bool cooldown_ok = (m_last_short_signal == 0) || (TimeCurrent() - m_last_short_signal >= cooldown_seconds);
          bool is_break = (last_close < (donchian_low - m_entry_buffer_pts * _Point)) ||
                          (last_close < (lower_k - m_entry_buffer_pts * _Point));
-         bool is_pullback_add = (m_last_short_break > 0.0) &&
+         bool is_pullback_add = m_allow_adds &&
+                                (m_last_short_break > 0.0) &&
                                 (MathAbs(last_close - m_last_short_break) <= last_atr * m_pullback_atr_frac) &&
                                 cooldown_ok;
 

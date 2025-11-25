@@ -112,16 +112,16 @@ input int    InpBOKeltnerEMAPeriod = 20;              // Keltner EMA period (H1)
 input int    InpBOKeltnerATRPeriod = 20;              // Keltner ATR period (H1)
 input double InpBOKeltnerMult = 1.5;                  // Keltner ATR multiplier
 input double InpBOADXMin = 23.0;                      // Minimum ADX to allow breakout trades
-input double InpBOEntryBuffer = 20.0;                 // Entry buffer above/below bands (points)
+input double InpBOEntryBuffer = 15.0;                 // Entry buffer above/below bands (points)
 input double InpBOPullbackATRFrac = 0.5;              // Allow add-on when price retests within this ATR fraction
 input int    InpBOCooldownBars = 4;                   // Minimum bars between breakout/add signals
-input double InpBOTp1Distance = 2.0;                  // Breakout TP1 distance (x risk)
-input double InpBOTp2Distance = 3.2;                  // Breakout TP2 distance (x risk)
+input double InpBOTp1Distance = 1.8;                  // Breakout TP1 distance (x risk)
+input double InpBOTp2Distance = 2.8;                  // Breakout TP2 distance (x risk)
 input int    InpBOChandelierATR = 20;                 // ATR period for breakout Chandelier trailing
-input double InpBOChandelierMult = 2.8;               // ATR multiplier for breakout Chandelier trailing
+input double InpBOChandelierMult = 2.6;               // ATR multiplier for breakout Chandelier trailing
 input int    InpBOChandelierLookback = 15;            // Lookback bars for breakout Chandelier (highest/lowest)
-input double InpBODailyLossStop = 1.5;                // Halt new breakout trades if daily PnL <= -X%
-input double InpBOMaxRiskPct = 1.1;                   // Cap per-trade risk % for breakout entries
+input double InpBODailyLossStop = 0.8;                // Halt new breakout trades if daily PnL <= -X%
+input double InpBOMaxRiskPct = 1.0;                   // Cap per-trade risk % for breakout entries
 
 input group "=== SMC ORDER BLOCKS ==="
 input bool   InpEnableSMC = true;                     // Enable SMC Order Block Analysis
@@ -601,7 +601,8 @@ int OnInit()
             InpBOCooldownBars,
             20,   // H4 fast EMA
             50,   // H4 slow EMA
-            0.0   // slope buffer (flat filter)
+            0.0,  // slope buffer (flat filter)
+            false // allow_adds disabled to reduce stacking
       );
       if (InpEnableVolBreakout && !g_volatility_breakout.Init())
       {
