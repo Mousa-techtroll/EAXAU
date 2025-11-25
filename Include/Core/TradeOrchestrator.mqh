@@ -140,7 +140,7 @@ public:
       }
       else if (StringFind(pattern, "Volatility Breakout") >= 0)
       {
-         multiplier = 1.10;
+         multiplier = 1.00;
       }
 
       double final_risk = base_risk * multiplier;

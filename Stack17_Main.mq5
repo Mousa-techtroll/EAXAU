@@ -116,12 +116,12 @@ input double InpBOEntryBuffer = 15.0;                 // Entry buffer above/belo
 input double InpBOPullbackATRFrac = 0.5;              // Allow add-on when price retests within this ATR fraction
 input int    InpBOCooldownBars = 4;                   // Minimum bars between breakout/add signals
 input double InpBOTp1Distance = 1.8;                  // Breakout TP1 distance (x risk)
-input double InpBOTp2Distance = 2.8;                  // Breakout TP2 distance (x risk)
+input double InpBOTp2Distance = 2.4;                  // Breakout TP2 distance (x risk)
 input int    InpBOChandelierATR = 20;                 // ATR period for breakout Chandelier trailing
 input double InpBOChandelierMult = 2.6;               // ATR multiplier for breakout Chandelier trailing
 input int    InpBOChandelierLookback = 15;            // Lookback bars for breakout Chandelier (highest/lowest)
 input double InpBODailyLossStop = 0.8;                // Halt new breakout trades if daily PnL <= -X%
-input double InpBOMaxRiskPct = 1.0;                   // Cap per-trade risk % for breakout entries
+input double InpBOMaxRiskPct = 0.8;                   // Cap per-trade risk % for breakout entries
 
 input group "=== SMC ORDER BLOCKS ==="
 input bool   InpEnableSMC = true;                     // Enable SMC Order Block Analysis
