@@ -108,8 +108,17 @@ public:
       // Apply pattern-specific multiplier
       double multiplier = 1.0;
 
-      // Bullish MA Cross
-      if (StringFind(pattern, "Bullish MA") >= 0 || StringFind(pattern, "MACross") >= 0)
+      // MA Cross patterns (check specific direction first, then generic)
+      if (StringFind(pattern, "Bullish MA") >= 0)
+      {
+         multiplier = 1.15;
+      }
+      else if (StringFind(pattern, "Bearish MA") >= 0)
+      {
+         multiplier = 1.15;
+      }
+      // Generic MACross without Bullish/Bearish prefix - applies to both directions
+      else if (StringFind(pattern, "MACross") >= 0)
       {
          multiplier = 1.15;
       }
@@ -118,18 +127,13 @@ public:
       {
          multiplier = 1.05;
       }
-      // Bullish Engulfing
-      else if (StringFind(pattern, "Bullish Engulf") >= 0)
+      // Bearish Pin Bar
+      else if (StringFind(pattern, "Bearish Pin") >= 0)
       {
          multiplier = 1.05;
       }
-      // Bearish MA Cross
-      else if (StringFind(pattern, "Bearish MA") >= 0 || StringFind(pattern, "MACross") >= 0)
-      {
-         multiplier = 1.15;
-      }
-      // Bearish Pin Bar
-      else if (StringFind(pattern, "Bearish Pin") >= 0)
+      // Bullish Engulfing
+      else if (StringFind(pattern, "Bullish Engulf") >= 0)
       {
          multiplier = 1.05;
       }
@@ -212,7 +216,11 @@ public:
          final_risk = m_risk_manager.ComputeRiskPercent(lots, calc_entry, sl);
 
       // COUNTER-TREND RISK CUTTER: optionally reduce risk (and resize) against D1 200 EMA
-      if (m_use_daily_200ema)
+      // NOTE: If risk_percent > 0, this was called from ProcessConfirmedSignal which already applied
+      // the counter-trend cut. Only apply here for immediate execution path (risk_percent == 0 initially).
+      bool counter_trend_already_applied = (risk_percent > 0);
+
+      if (m_use_daily_200ema && !counter_trend_already_applied)
       {
          double ma200_val = 0;
          double ma200_buf[];
@@ -232,6 +240,28 @@ public:
             if (resized > 0)
                lots = resized;
             LogPrint(">>> RISK ALERT: Counter-trend trade detected against 200 EMA. Risk reduced to ", final_risk, "%");
+         }
+      }
+
+      // Apply Volatility Regime Risk Adjustment (same as ProcessConfirmedSignal)
+      // This ensures immediate execution path has consistent risk sizing with confirmed path
+      if (m_volatility_regime != NULL && m_volatility_regime.IsEnabled())
+      {
+         double vol_multiplier = m_volatility_regime.GetRiskMultiplier();
+         if (MathAbs(vol_multiplier - 1.0) > 0.01)  // Only adjust if significant
+         {
+            double pre_vol_risk = final_risk;
+            final_risk = m_volatility_regime.AdjustRiskForVolatility(final_risk);
+
+            // Recalculate lot size with adjusted risk
+            double resized = m_risk_manager.CalculateLotSize(final_risk, calc_entry, sl);
+            if (resized > 0)
+               lots = resized;
+
+            SVolatilityAnalysis vol_analysis = m_volatility_regime.GetAnalysis();
+            LogPrint(">>> Volatility Regime: ", vol_analysis.regime_description);
+            LogPrint(">>> Risk: ", DoubleToString(pre_vol_risk, 2), "% -> ",
+                     DoubleToString(final_risk, 2), "% (x", DoubleToString(vol_multiplier, 2), ")");
          }
       }
 
@@ -329,8 +359,42 @@ public:
       double final_tp1 = 0;
       double final_tp2 = 0;
 
-      // === ADAPTIVE TP SYSTEM ===
-      if(m_use_adaptive_tp && m_adaptive_tp_manager != NULL && m_regime_classifier != NULL)
+      // Check if this is a mean reversion pattern (BB_MEAN_REVERSION, RANGE_BOX, FALSE_BREAKOUT_FADE)
+      // Mean reversion patterns have specially calculated TPs targeting BB middle or range boundaries
+      // These should NOT be overwritten by adaptive TP system designed for trend-following
+      bool is_mean_reversion = (pending_signal.pattern_type == PATTERN_BB_MEAN_REVERSION ||
+                                pending_signal.pattern_type == PATTERN_RANGE_BOX ||
+                                pending_signal.pattern_type == PATTERN_FALSE_BREAKOUT_FADE);
+
+      if(is_mean_reversion)
+      {
+         // PRESERVE original TPs from SignalProcessor (BB middle targeting)
+         // Only adjust for entry price drift if significant
+         double entry_drift = MathAbs(current_entry - pending_signal.entry_price);
+         double drift_adjustment = 0;
+
+         if(pending_signal.signal_type == SIGNAL_LONG)
+            drift_adjustment = current_entry - pending_signal.entry_price;  // Positive if entry is higher
+         else
+            drift_adjustment = pending_signal.entry_price - current_entry;  // Positive if entry is lower
+
+         // Shift TPs by the same amount as entry drift to maintain R:R
+         if(pending_signal.signal_type == SIGNAL_LONG)
+         {
+            final_tp1 = pending_signal.take_profit1 + drift_adjustment;
+            final_tp2 = pending_signal.take_profit2 + drift_adjustment;
+         }
+         else
+         {
+            final_tp1 = pending_signal.take_profit1 - drift_adjustment;
+            final_tp2 = pending_signal.take_profit2 - drift_adjustment;
+         }
+
+         LogPrint("    MEAN REVERSION: Preserving BB/structure-based TPs");
+         LogPrint("    Entry drift: ", DoubleToString(drift_adjustment, 2), " | Adjusted TPs accordingly");
+      }
+      // === ADAPTIVE TP SYSTEM (for trend-following patterns only) ===
+      else if(m_use_adaptive_tp && m_adaptive_tp_manager != NULL && m_regime_classifier != NULL)
       {
          LogPrint("    Using ADAPTIVE TP System...");
 
@@ -398,13 +462,9 @@ public:
       double base_risk = GetRiskForQuality(pending_signal.quality, pending_signal.pattern_name);
       double adjusted_risk = m_risk_manager.AdjustRiskForStreak(base_risk);
 
-      // Apply short risk multiplier
-      if (pending_signal.signal_type == SIGNAL_SHORT && m_short_risk_multiplier > 0)
-      {
-         adjusted_risk *= m_short_risk_multiplier;
-         LogPrint("    Short risk bias applied: x", DoubleToString(m_short_risk_multiplier, 2),
-                  " => ", adjusted_risk, "%");
-      }
+      // NOTE: Short risk multiplier is already applied in SignalProcessor.CheckForNewSignals()
+      // during signal detection. Applying it again here would cause double-reduction.
+      // The multiplier is stored in pending_signal via the risk calculation flow.
 
       // Apply Volatility Regime Risk Adjustment (Enhancement 6)
       if (m_volatility_regime != NULL && m_volatility_regime.IsEnabled())
@@ -419,6 +479,26 @@ public:
             LogPrint("    ATR Ratio: ", DoubleToString(vol_analysis.atr_ratio, 2),
                      " | Risk: ", DoubleToString(pre_vol_risk, 2), "% -> ",
                      DoubleToString(adjusted_risk, 2), "% (x", DoubleToString(vol_multiplier, 2), ")");
+         }
+      }
+
+      // COUNTER-TREND RISK CUTTER: Apply before lot calculation for consistency
+      if (m_use_daily_200ema)
+      {
+         double ma200_val = 0;
+         double ma200_buf[];
+         ArraySetAsSeries(ma200_buf, true);
+
+         if (CopyBuffer(m_handle_ma_200, 0, 0, 1, ma200_buf) > 0)
+            ma200_val = ma200_buf[0];
+
+         bool is_counter_trend = ((pending_signal.signal_type == SIGNAL_SHORT && current_entry > ma200_val) ||
+                                  (pending_signal.signal_type == SIGNAL_LONG && current_entry < ma200_val));
+
+         if (is_counter_trend)
+         {
+            adjusted_risk *= 0.5;
+            LogPrint("    >>> RISK ALERT: Counter-trend trade against 200 EMA. Risk reduced to ", DoubleToString(adjusted_risk, 2), "%");
          }
       }
 

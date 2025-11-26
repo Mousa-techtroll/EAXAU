@@ -446,21 +446,15 @@ private:
 
    //+------------------------------------------------------------------+
    //| Get pattern-specific TP adjustment                               |
+   //| NOTE: Mean reversion patterns (BB_MEAN_REVERSION, RANGE_BOX,     |
+   //| FALSE_BREAKOUT_FADE) are handled separately in TradeOrchestrator |
+   //| with BB middle targeting. This function is only called for       |
+   //| trend-following patterns now, but MR cases kept for completeness.|
    //+------------------------------------------------------------------+
    double GetPatternAdjustment(ENUM_PATTERN_TYPE pattern)
    {
       switch(pattern)
       {
-         // Mean reversion patterns - conservative targets
-         case PATTERN_BB_MEAN_REVERSION:
-            return 0.8;  // Mean reversion targets middle, don't overshoot
-
-         case PATTERN_RANGE_BOX:
-            return 0.85; // Range trading has defined boundaries
-
-         case PATTERN_FALSE_BREAKOUT_FADE:
-            return 0.9;  // Fades often reverse quickly
-
          // Trend-following patterns - can extend
          case PATTERN_MA_CROSS_ANOMALY:
             return 1.2;  // MA crosses can run
@@ -476,6 +470,16 @@ private:
 
          case PATTERN_SR_BOUNCE:
             return 1.0;  // Standard targets
+
+         case PATTERN_VOLATILITY_BREAKOUT:
+            return 1.0;  // Breakouts use their own TP multipliers
+
+         // Mean reversion patterns - not used here (handled in TradeOrchestrator)
+         // but return 1.0 as fallback if somehow called
+         case PATTERN_BB_MEAN_REVERSION:
+         case PATTERN_RANGE_BOX:
+         case PATTERN_FALSE_BREAKOUT_FADE:
+            return 1.0;
 
          default:
             return 1.0;

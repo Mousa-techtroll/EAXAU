@@ -10,6 +10,15 @@
 #include "../Common/Utils.mqh"
 
 //+------------------------------------------------------------------+
+//| Lightweight position risk data (avoids full SPosition duplication)|
+//+------------------------------------------------------------------+
+struct SPositionRisk
+{
+   ulong    ticket;
+   double   initial_risk_pct;
+};
+
+//+------------------------------------------------------------------+
 //| Risk Manager Class                                                |
 //+------------------------------------------------------------------+
 class CRiskManager
@@ -32,8 +41,10 @@ private:
       // Risk statistics
       SRiskStats              m_stats;
 
-      // Position tracking
-      SPosition               m_positions[];
+      // Position risk tracking (lightweight - only tracks risk data, not full position state)
+      // Full position state (TP flags, trailing, etc.) is managed by PositionCoordinator
+      // This avoids state desync between two full SPosition arrays
+      SPositionRisk           m_position_risks[];
       int                     m_position_count;
 
 public:
@@ -58,7 +69,7 @@ public:
             m_risk_reduction_level2 = level2_reduction;
 
             m_position_count = 0;
-            ArrayResize(m_positions, 0);
+            ArrayResize(m_position_risks, 0);
       }
 
       //+------------------------------------------------------------------+
@@ -323,11 +334,11 @@ public:
             // Reset stats
             double total_risk_exposure_pct = 0;
 
-            // Iterate through the manager's internal list of positions
+            // Iterate through the lightweight risk tracking array
             for(int i = 0; i < m_position_count; i++)
             {
                   // Sum the initial risk percentage of each open position
-                  total_risk_exposure_pct += m_positions[i].initial_risk_pct;
+                  total_risk_exposure_pct += m_position_risks[i].initial_risk_pct;
             }
 
             // Update stats
@@ -361,15 +372,17 @@ public:
       }
 
       //+------------------------------------------------------------------+
-      //| Add position to tracking                                          |
+      //| Add position to tracking (lightweight - only risk data)           |
+      //| Full position state is managed by PositionCoordinator             |
       //+------------------------------------------------------------------+
       void AddPosition(SPosition &position)
       {
-            // Add to internal array
-            ArrayResize(m_positions, m_position_count + 1);
-            m_positions[m_position_count] = position;
+            // Add only risk-relevant data to lightweight array
+            ArrayResize(m_position_risks, m_position_count + 1);
+            m_position_risks[m_position_count].ticket = position.ticket;
+            m_position_risks[m_position_count].initial_risk_pct = position.initial_risk_pct;
             m_position_count++;
-            
+
             // Update aggregate stats
             UpdatePositions();
       }
@@ -380,10 +393,10 @@ public:
       void RemovePosition(ulong ticket, bool is_winner)
       {
             double profit = 0;
-            // Find the position in our internal array to get its profit
+            // Find the position in our lightweight risk array
             for (int i = 0; i < m_position_count; i++)
             {
-                if (m_positions[i].ticket == ticket)
+                if (m_position_risks[i].ticket == ticket)
                 {
                     // Position found, record result using history (position is likely already closed)
                     if (HistorySelectByPosition(ticket))
@@ -406,17 +419,17 @@ public:
                     }
                     RecordTradeResult(profit);
 
-                    // Remove from array
+                    // Remove from lightweight array
                     for (int j = i; j < m_position_count - 1; j++)
                     {
-                        m_positions[j] = m_positions[j + 1];
+                        m_position_risks[j] = m_position_risks[j + 1];
                     }
                     m_position_count--;
-                    ArrayResize(m_positions, m_position_count);
+                    ArrayResize(m_position_risks, m_position_count);
                     break; // Exit loop once found and removed
                 }
             }
-            
+
             // Update aggregate stats
             UpdatePositions();
       }

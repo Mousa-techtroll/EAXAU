@@ -51,7 +51,7 @@ private:
    bool                  m_breakout_enabled;
    double                m_bo_tp1_mult;
    double                m_bo_tp2_mult;
-   double                m_bo_max_risk_pct;
+   double                m_risk_cap;
 
    // Session/Time filters
    bool                  m_trade_asia;
@@ -146,7 +146,7 @@ public:
                     // Short protection
                     double bull_mr_short_adx_cap, int bull_mr_short_macro_max, double short_risk_multiplier,
                     double short_trend_min_adx, double short_trend_max_adx, int short_mr_macro_max,
-                    double bo_daily_loss_stop = 1.5, double bo_max_risk_pct = 1.1)
+                    double bo_daily_loss_stop = 1.5, double risk_cap = 1.5)
    {
       m_trend_detector = trend;
       m_regime_classifier = regime;
@@ -207,7 +207,7 @@ public:
       m_short_trend_max_adx = short_trend_max_adx;
       m_short_mr_macro_max = short_mr_macro_max;
       m_bo_daily_loss_stop = bo_daily_loss_stop;
-      m_bo_max_risk_pct = bo_max_risk_pct;
+      m_risk_cap = risk_cap;
 
       // Default momentum to disabled
       m_momentum_filter = NULL;
@@ -374,9 +374,26 @@ public:
       {
          bool is_mr = m_signal_validator.IsMeanReversionPattern(pattern_type);
          bool session_ok = IsLondonSession() || IsNewYorkSession();
+
+         // Asia session exception: Allow MR shorts with extreme RSI + controlled ADX
+         // This aligns with SignalValidator.ValidateEntryConditions() Asia exceptions
+         if (!session_ok && IsAsiaSession() && is_mr)
+         {
+            double current_rsi = m_price_action_lowvol.GetRSI();
+            bool is_extreme_overbought = (current_rsi > m_200ema_rsi_overbought);
+            double adx_cap = (m_bull_mr_short_adx_cap > 0) ? m_bull_mr_short_adx_cap : m_mr_max_adx_filter;
+
+            if (is_extreme_overbought && current_adx <= adx_cap)
+            {
+               LogPrint(">>> Asia MR Short ALLOWED: RSI extreme (", DoubleToString(current_rsi, 1),
+                        ") + ADX controlled (", DoubleToString(current_adx, 1), " <= ", adx_cap, ")");
+               session_ok = true;  // Override session restriction
+            }
+         }
+
          if (!session_ok)
          {
-            LogPrint("REJECT: Shorts restricted to London/NY sessions");
+            LogPrint("REJECT: Shorts restricted to London/NY sessions (or Asia with extreme RSI)");
             return;
          }
 
@@ -393,8 +410,33 @@ public:
          {
             if (above_200)
             {
-               LogPrint("REJECT: MR short blocked above D1 200 EMA");
-               return;
+               // Exception: Allow MR short above 200 EMA if conditions are extremely favorable
+               double current_rsi = m_price_action_lowvol.GetRSI();
+               bool is_extreme_overbought = (current_rsi > m_200ema_rsi_overbought);
+               bool macro_bearish = (macro_score <= -1);
+               bool h4_bearish = (h4_trend == TREND_BEARISH);
+               double ct_adx_cap = (m_bull_mr_short_adx_cap > 0) ? m_bull_mr_short_adx_cap : m_mr_max_adx_filter;
+               bool adx_controlled = (current_adx <= ct_adx_cap);
+
+               bool allow_mr_short_above_200 = false;
+
+               if (is_extreme_overbought && adx_controlled)
+               {
+                  LogPrint(">>> ALLOW: MR short above 200 EMA (RSI extreme ", DoubleToString(current_rsi, 1),
+                           " + ADX controlled ", DoubleToString(current_adx, 1), ")");
+                  allow_mr_short_above_200 = true;
+               }
+               else if ((macro_bearish || h4_bearish) && adx_controlled)
+               {
+                  LogPrint(">>> ALLOW: MR short above 200 EMA (bearish macro/H4 + ADX controlled)");
+                  allow_mr_short_above_200 = true;
+               }
+
+               if (!allow_mr_short_above_200)
+               {
+                  LogPrint("REJECT: MR short blocked above D1 200 EMA (no exception met)");
+                  return;
+               }
             }
             if (macro_score > m_short_mr_macro_max)
             {
@@ -456,34 +498,11 @@ public:
          return;
       }
 
-      // Extra guard: MR shorts need bearish macro backdrop
-      if (pa_signal == SIGNAL_SHORT && m_signal_validator.IsMeanReversionPattern(pattern_type) && macro_score > -1)
-      {
-         LogPrint("REJECT: MR short blocked (macro not bearish enough: ", macro_score, ")");
-         return;
-      }
-
-      // Block weak MR shorts in strong bulls (price > D1 200 EMA) unless macro + ADX are supportive
-      if (pa_signal == SIGNAL_SHORT && m_signal_validator.IsMeanReversionPattern(pattern_type) && m_use_daily_200ema)
-      {
-         double ma200_buf[];
-         ArraySetAsSeries(ma200_buf, true);
-         if (CopyBuffer(m_handle_ma_200, 0, 0, 1, ma200_buf) > 0)
-         {
-            double d1_ema_200 = ma200_buf[0];
-            double current_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-            if (current_price > d1_ema_200)
-            {
-               double adx_cap = (m_bull_mr_short_adx_cap > 0) ? m_bull_mr_short_adx_cap : m_mr_max_adx_filter;
-               if (macro_score > m_bull_mr_short_macro_max || current_adx > adx_cap)
-               {
-                  LogPrint("REJECT: MR short above 200 EMA blocked (Macro ", macro_score,
-                           " / ADX ", DoubleToString(current_adx, 1), " > cap ", adx_cap, ")");
-                  return;
-               }
-            }
-         }
-      }
+      // NOTE: MR short macro check already performed at line 416 using m_short_mr_macro_max
+      // NOTE: MR short above 200 EMA check already performed at lines 411-414
+      // NOTE: MR short ADX cap check already performed at lines 421-424
+      // Removed duplicate 200 EMA fetch and redundant checks that were never reached
+      // (line 411-414 returns early if above_200 is true for MR shorts)
 
       LogPrint(">>> VALIDATION PASSED - Proceeding with trade");
 
@@ -540,33 +559,26 @@ public:
       // Determine risk with pattern-specific allocation
       double base_risk = m_trade_orchestrator.GetRiskForQuality(quality, pattern_name);
       double adjusted_risk = m_risk_manager.AdjustRiskForStreak(base_risk);
-      if (pa_signal == SIGNAL_SHORT && m_short_risk_multiplier > 0 && pattern_type != PATTERN_VOLATILITY_BREAKOUT)
+      if (pa_signal == SIGNAL_SHORT && m_short_risk_multiplier > 0)
       {
-         adjusted_risk *= m_short_risk_multiplier;
-         LogPrint(">>> Short risk bias applied: x", DoubleToString(m_short_risk_multiplier, 2),
-                  " => ", adjusted_risk, "%");
+         if (pattern_type == PATTERN_VOLATILITY_BREAKOUT)
+         {
+            // Breakout shorts use full risk - intentional design decision
+            // Breakouts have stricter entry criteria (ADX >= adx_min, H4 slope alignment)
+            LogPrint(">>> Breakout short: Risk multiplier BYPASSED (using full ", DoubleToString(adjusted_risk, 2), "%)");
+         }
+         else
+         {
+            adjusted_risk *= m_short_risk_multiplier;
+            LogPrint(">>> Short risk bias applied: x", DoubleToString(m_short_risk_multiplier, 2),
+                     " => ", DoubleToString(adjusted_risk, 2), "%");
+         }
       }
-      // Breakout-specific streak scaling
-      if (pattern_type == PATTERN_VOLATILITY_BREAKOUT)
+      // Global per-trade risk cap
+      if (adjusted_risk > m_risk_cap)
       {
-         int losses = m_risk_manager.GetConsecutiveLosses();
-         if (losses >= 4)
-         {
-            adjusted_risk *= 0.50;
-            LogPrint(">>> Breakout risk scaled to 50% after ", losses, " losses");
-         }
-         else if (losses >= 3)
-         {
-            adjusted_risk *= 0.70;
-            LogPrint(">>> Breakout risk scaled to 70% after ", losses, " losses");
-         }
-
-         // Cap breakout risk per trade
-         if (adjusted_risk > m_bo_max_risk_pct)
-         {
-            LogPrint(">>> Breakout risk capped to ", m_bo_max_risk_pct, "% (from ", adjusted_risk, "%)");
-            adjusted_risk = m_bo_max_risk_pct;
-         }
+         LogPrint(">>> Risk capped to ", m_risk_cap, "% (from ", adjusted_risk, "%)");
+         adjusted_risk = m_risk_cap;
       }
 
       // Calculate position size - use correct source based on pattern type
@@ -834,9 +846,26 @@ public:
       {
          bool is_mr = m_signal_validator.IsMeanReversionPattern(pending.pattern_type);
          bool session_ok = IsLondonSession() || IsNewYorkSession();
+
+         // Asia session exception: Allow MR shorts with extreme RSI + controlled ADX
+         // Must match the same logic in CheckForNewSignals() to avoid rejection of valid signals
+         if (!session_ok && IsAsiaSession() && is_mr)
+         {
+            double current_rsi = m_price_action_lowvol.GetRSI();
+            bool is_extreme_overbought = (current_rsi > m_200ema_rsi_overbought);
+            double adx_cap = (m_bull_mr_short_adx_cap > 0) ? m_bull_mr_short_adx_cap : m_mr_max_adx_filter;
+
+            if (is_extreme_overbought && current_adx <= adx_cap)
+            {
+               LogPrint(">>> CONFIRMATION: Asia MR Short ALLOWED: RSI extreme (", DoubleToString(current_rsi, 1),
+                        ") + ADX controlled (", DoubleToString(current_adx, 1), " <= ", adx_cap, ")");
+               session_ok = true;
+            }
+         }
+
          if (!session_ok)
          {
-            LogPrint("CONFIRMATION REJECT: Shorts restricted to London/NY sessions");
+            LogPrint("CONFIRMATION REJECT: Shorts restricted to London/NY sessions (or Asia with extreme RSI)");
             return false;
          }
 
@@ -852,8 +881,33 @@ public:
          {
             if (above_200)
             {
-               LogPrint("CONFIRMATION REJECT: MR short blocked above D1 200 EMA");
-               return false;
+               // Exception: Allow MR short above 200 EMA if conditions are extremely favorable
+               // Must match logic in CheckForNewSignals()
+               double current_rsi = m_price_action_lowvol.GetRSI();
+               bool is_extreme_overbought = (current_rsi > m_200ema_rsi_overbought);
+               bool macro_bearish = (macro_score <= -1);
+               bool h4_bearish = (h4_trend == TREND_BEARISH);
+               double ct_adx_cap = (m_bull_mr_short_adx_cap > 0) ? m_bull_mr_short_adx_cap : m_mr_max_adx_filter;
+               bool adx_controlled = (current_adx <= ct_adx_cap);
+
+               bool allow_mr_short_above_200 = false;
+
+               if (is_extreme_overbought && adx_controlled)
+               {
+                  LogPrint(">>> CONFIRMATION: MR short above 200 EMA ALLOWED (RSI extreme + ADX controlled)");
+                  allow_mr_short_above_200 = true;
+               }
+               else if ((macro_bearish || h4_bearish) && adx_controlled)
+               {
+                  LogPrint(">>> CONFIRMATION: MR short above 200 EMA ALLOWED (bearish macro/H4 + ADX controlled)");
+                  allow_mr_short_above_200 = true;
+               }
+
+               if (!allow_mr_short_above_200)
+               {
+                  LogPrint("CONFIRMATION REJECT: MR short blocked above D1 200 EMA (no exception met)");
+                  return false;
+               }
             }
             if (macro_score > m_short_mr_macro_max)
             {

@@ -159,10 +159,12 @@ int CalculatePatternConfidence(string pattern, double entry_price, int ma_fast_p
 }
 
 //+------------------------------------------------------------------+
-//| FILTER 5: Market Regime Classifier                               |
-//| Identifies current market regime                                 |
+//| FILTER 5: Market Regime Classifier (DEPRECATED)                  |
+//| NOTE: This is dead code - regime classification is now handled   |
+//| by RegimeClassifier.mqh using ENUM_REGIME_TYPE. These functions  |
+//| are kept for reference but should be removed in future cleanup.  |
 //+------------------------------------------------------------------+
-enum MarketRegime
+enum MarketRegime  // DEPRECATED - use ENUM_REGIME_TYPE from Enums.mqh
 {
     REGIME_TRENDING_BULLISH,
     REGIME_TRENDING_BEARISH,
@@ -171,9 +173,8 @@ enum MarketRegime
     REGIME_LOW_VOLATILITY
 };
 
-// PERFORMANCE FIX: Now accepts ATR/ADX values and threshold parameters
-// Updated to use configurable thresholds instead of hardcoded values
-// Default values match legacy behavior for backward compatibility
+// DEPRECATED: Use RegimeClassifier.mqh instead
+// Kept for backward compatibility - not actively used
 MarketRegime ClassifyMarketRegime(double atr = 0.0, double adx = 0.0,
                                  double high_vol_atr = 40.0, double low_vol_atr = 10.0,
                                  double range_adx = 20.0, double di_plus = 0.0, double di_minus = 0.0)
@@ -247,6 +248,8 @@ MarketRegime ClassifyMarketRegime(double atr = 0.0, double adx = 0.0,
     return REGIME_CHOPPY_RANGING;  // Default fallback
 }
 
+// DEPRECATED: Use SignalValidator validation logic instead
+// Kept for backward compatibility - not actively used
 bool IsRegimeFavorable(MarketRegime regime, int trade_direction)
 {
     // Block trading in choppy/ranging markets

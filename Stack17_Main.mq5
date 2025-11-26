@@ -2,6 +2,13 @@
 //| Stack17_Main.mq5                                                  |
 //| Stack1.7 - Gold Trading EA                                        |
 //| v4.6                                                              |
+//|                                                                   |
+//| ARCHITECTURE NOTES:                                               |
+//| - Multiple components create their own indicator handles for      |
+//|   H1 ATR(14), H4 ADX(14), etc. This is by design for modularity. |
+//| - MT5 internally caches indicator handles, so duplicate calls to  |
+//|   iATR/iADX with same parameters share the underlying calculation.|
+//| - Future optimization: Create a central IndicatorManager class.   |
 //+------------------------------------------------------------------+
 #property copyright ""
 #property version   "4.60"
@@ -50,6 +57,7 @@ input double InpRiskAPlusSetup = 1.4;                 // Risk % for A+ setups
 input double InpRiskASetup = 1.2;                     // Risk % for A setups
 input double InpRiskBPlusSetup = 1.2;                 // Risk % for B+ setups
 input double InpRiskBSetup = 1.0;                     // Risk % for B setups
+input double InpMaxRiskPerTrade = 1.5;                // Absolute cap on per-trade risk (%)
 input double InpMaxTotalExposure = 5.0;               // Maximum total exposure %
 input double InpDailyLossLimit = 3.0;                 // Daily loss limit %
 input double InpMaxLotMultiplier = 10.0;              // Max lot size (x min lot)
@@ -121,7 +129,6 @@ input int    InpBOChandelierATR = 20;                 // ATR period for breakout
 input double InpBOChandelierMult = 2.6;               // ATR multiplier for breakout Chandelier trailing
 input int    InpBOChandelierLookback = 15;            // Lookback bars for breakout Chandelier (highest/lowest)
 input double InpBODailyLossStop = 0.8;                // Halt new breakout trades if daily PnL <= -X%
-input double InpBOMaxRiskPct = 0.6;                   // Cap per-trade risk % for breakout entries
 
 input group "=== SMC ORDER BLOCKS ==="
 input bool   InpEnableSMC = true;                     // Enable SMC Order Block Analysis
@@ -711,7 +718,7 @@ int OnInit()
                                                 // Short protection
                                                 InpBullMRShortAdxCap, InpBullMRShortMacroMax, InpShortRiskMultiplier,
                                                 InpShortTrendMinADX, InpShortTrendMaxADX, InpShortMRMacroMax,
-                                                InpBODailyLossStop, InpBOMaxRiskPct);
+                                                InpBODailyLossStop, InpMaxRiskPerTrade);
 
       // Configure Momentum Filter for SignalProcessor
       if(InpEnableMomentum && g_momentum_filter != NULL)

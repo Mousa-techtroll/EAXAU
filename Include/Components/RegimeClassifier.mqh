@@ -176,7 +176,34 @@ private:
                   return;
             }
 
-            // Default: UNKNOWN (transitional)
+            // Priority 5: TRANSITION ZONE (ADX between ranging and trending thresholds)
+            // This handles the gap where ADX is 20-23 (between m_adx_ranging_level and m_adx_trending_level)
+            if(m_regime_data.adx_value >= m_adx_ranging_level &&
+               m_regime_data.adx_value <= m_adx_trending_level)
+            {
+                  // In transition zone: classify based on ATR behavior
+                  if(atr_ratio >= 1.0)
+                  {
+                     // ATR expanding or stable-high: lean toward trending
+                     m_regime_data.regime = REGIME_TRENDING;
+                  }
+                  else
+                  {
+                     // ATR contracting: lean toward ranging
+                     m_regime_data.regime = REGIME_RANGING;
+                  }
+                  return;
+            }
+
+            // Priority 6: Check for RANGING with normal ATR (ADX < ranging threshold)
+            // This catches cases where ATR is normal (0.9-1.1) but ADX is low
+            if(m_regime_data.adx_value < m_adx_ranging_level)
+            {
+                  m_regime_data.regime = REGIME_RANGING;
+                  return;
+            }
+
+            // Default: UNKNOWN (truly undefined conditions)
             m_regime_data.regime = REGIME_UNKNOWN;
       }
 };
