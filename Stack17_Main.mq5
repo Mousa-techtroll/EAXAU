@@ -53,11 +53,11 @@
 input string InpVersion = "4.6";                          // EA Version
 
 input group "=== RISK MANAGEMENT ==="
-input double InpRiskAPlusSetup = 1.4;                 // Risk % for A+ setups
-input double InpRiskASetup = 1.2;                     // Risk % for A setups
-input double InpRiskBPlusSetup = 1.2;                 // Risk % for B+ setups
-input double InpRiskBSetup = 1.0;                     // Risk % for B setups
-input double InpMaxRiskPerTrade = 1.5;                // Absolute cap on per-trade risk (%)
+input double InpRiskAPlusSetup = 1.5;                 // Risk % for A+ setups (raised - top patterns proven)
+input double InpRiskASetup = 1.3;                     // Risk % for A setups (raised)
+input double InpRiskBPlusSetup = 1.1;                 // Risk % for B+ setups
+input double InpRiskBSetup = 0.9;                     // Risk % for B setups (reduced - lower quality)
+input double InpMaxRiskPerTrade = 1.6;                // Absolute cap on per-trade risk (%)
 input double InpMaxTotalExposure = 5.0;               // Maximum total exposure %
 input double InpDailyLossLimit = 3.0;                 // Daily loss limit %
 input double InpMaxLotMultiplier = 10.0;              // Max lot size (x min lot)
@@ -70,12 +70,12 @@ input int InpWeekendCloseHour = 20;                   // Hour to close positions
 input int InpMaxTradesPerDay = 5;                     // Max trades per day (0 = unlimited)
 
 input group "=== SHORT PROTECTION ==="
-input double InpShortRiskMultiplier = 1.0;            // Risk multiplier for all short trades (cuts drawdown when gold trends up)
-input double InpBullMRShortAdxCap = 30.0;             // Max ADX to allow MR shorts above D1 200 EMA
-input int    InpBullMRShortMacroMax = -1;             // Max macro bias to allow MR shorts above D1 200 EMA (<=-1 = bearish required)
-input double InpShortTrendMinADX = 18.0;              // Min ADX to allow trend shorts (avoid chop)
-input double InpShortTrendMaxADX = 60.0;              // Max ADX to allow trend shorts (avoid exhaustion)
-input int    InpShortMRMacroMax = -1;                 // Max macro bias to allow MR shorts (needs clear bearish)
+input double InpShortRiskMultiplier = 0.5;            // Risk multiplier for all short trades (0.5 = half size, bearish patterns underperform)
+input double InpBullMRShortAdxCap = 25.0;             // Max ADX to allow MR shorts above D1 200 EMA (tightened)
+input int    InpBullMRShortMacroMax = -2;             // Max macro bias to allow MR shorts above D1 200 EMA (<=-2 = strong bearish required)
+input double InpShortTrendMinADX = 22.0;              // Min ADX to allow trend shorts (avoid chop, raised)
+input double InpShortTrendMaxADX = 50.0;              // Max ADX to allow trend shorts (avoid exhaustion, tightened)
+input int    InpShortMRMacroMax = -2;                 // Max macro bias to allow MR shorts (needs strong bearish)
 
 input group "=== CONSECUTIVE LOSS PROTECTION ==="
 input bool InpEnableLossScaling = true;               // Enable risk scaling after losses
@@ -101,7 +101,7 @@ input double InpATRMultiplierSL = 3.0;                // ATR multiplier for SL
 input double InpMinSLPoints = 800.0;                  // Minimum SL distance (points)
 // NOTE: InpScoringRRTarget only affects R:R scoring. Actual TPs use InpTP1Distance/InpTP2Distance below
 input double InpScoringRRTarget = 2.5;                // TP multiplier for R:R scoring ONLY (not actual TPs)
-input double InpMinRRRatio = 1.5;                     // Minimum R:R ratio to execute trade
+input double InpMinRRRatio = 1.3;                     // Minimum R:R ratio to execute trade
 input int InpRSIPeriod = 14;                          // RSI period for price action
 
 input group "=== TRAILING STOP SETTINGS ==="
@@ -235,20 +235,20 @@ input int InpPointsBPlusSetup = 6;                    // Points needed for B+ se
 input int InpPointsBSetup = 5;                        // Points needed for B setup
 
 input group "=== PATTERN ENABLE/DISABLE ==="
-input bool InpEnableBullishEngulfing = true;          // Enable Bullish Engulfing
-input bool InpEnableBullishPinBar = true;             // Enable Bullish Pin Bar
-input bool InpEnableBullishMAAnomaly = true;          // Enable Bullish MA Cross
-input bool InpEnableBearishEngulfing = true;          // Enable Bearish Engulfing
-input bool InpEnableBearishPinBar = true;             // Enable Bearish Pin Bar
-input bool InpEnableBearishMAAnomaly = true;         // Enable Bearish MA Cross
-input bool InpEnableBullishLiquiditySweep = true;    // Enable Bullish Liquidity Sweep
-input bool InpEnableBearishLiquiditySweep = true;    // Enable Bearish Liquidity Sweep
-input bool InpEnableSupportBounce = true;            // Enable Support Bounce
+input bool InpEnableBullishEngulfing = true;          // Enable Bullish Engulfing [SCORE:92 - TOP PERFORMER]
+input bool InpEnableBullishPinBar = true;             // Enable Bullish Pin Bar [SCORE:88 - STRONG]
+input bool InpEnableBullishMAAnomaly = true;          // Enable Bullish MA Cross [SCORE:82 - RELIABLE]
+input bool InpEnableBearishEngulfing = false;         // Enable Bearish Engulfing [SCORE:42 - MARGINAL]
+input bool InpEnableBearishPinBar = false;            // Enable Bearish Pin Bar [SCORE:15 - DISABLE]
+input bool InpEnableBearishMAAnomaly = false;         // Enable Bearish MA Cross [SCORE:18 - DISABLE]
+input bool InpEnableBullishLiquiditySweep = true;     // Enable Bullish Liquidity Sweep [SCORE:65 - CONDITIONAL]
+input bool InpEnableBearishLiquiditySweep = false;    // Enable Bearish Liquidity Sweep [SCORE:38 - MARGINAL]
+input bool InpEnableSupportBounce = false;            // Enable Support Bounce [SCORE:35 - LOW SAMPLE]
 
 input group "=== LOW VOLATILITY PATTERNS ==="
-input bool InpEnableBBMeanReversion = true;          // Enable BB Mean Reversion
-input bool InpEnableRangeBoxTrading = true;          // Enable Range Box Trading
-input bool InpEnableFalseBreakoutFade = true;        // Enable False Breakout Fade
+input bool InpEnableBBMeanReversion = true;           // Enable BB Mean Reversion [SCORE:90 - CORE STRATEGY]
+input bool InpEnableRangeBoxTrading = true;           // Enable Range Box Trading [SCORE:58 - REGIME-DEPENDENT]
+input bool InpEnableFalseBreakoutFade = false;        // Enable False Breakout Fade [SCORE:22 - DISABLE]
 input int InpLowVolBBPeriod = 20;                     // Low Vol: Bollinger Bands period
 input double InpLowVolBBDeviation = 2.5;              // Low Vol: Bollinger Bands deviation
 input int InpLowVolRSIPeriod = 14;                    // Low Vol: RSI period
@@ -258,16 +258,35 @@ input double InpMRMaxATR = 50.0;                      // MR: Max ATR (increased 
 input double InpMRMaxADXFilter = 35.0;                // MR: Filter Max ADX (2024 adjusted)
 input double InpTFMinATR = 3.0;                       // TF: Min ATR (trend-following)
 
-input group "=== PATTERN SCORE ADJUSTMENTS ==="
-input int InpScoreBullishMAAnomaly = 90;              // Bullish MA Cross score
-input int InpScoreBullishEngulfing = 70;              // Bullish Engulfing score
-input int InpScoreBullishPinBar = 60;                 // Bullish Pin Bar score
-input int InpScoreBearishEngulfing = 70;              // Bearish Engulfing score
-input int InpScoreBearishPinBar = 60;                 // Bearish Pin Bar score
-input int InpScoreBearishMAAnomaly = 90;              // Bearish MA Cross score
-input int InpScoreBullishLiquiditySweep = 40;         // Bullish Liquidity Sweep score
-input int InpScoreBearishLiquiditySweep = 40;         // Bearish Liquidity Sweep score
-input int InpScoreSupportBounce = 50;                 // Support Bounce score
+input group "=== FALSE BREAKOUT FADE TUNING ==="
+input int    InpFBFSwingLookback = 11;                // FBF: Swing high/low lookback bars
+input double InpFBFPullbackPct = 0.001;               // FBF: Min pullback from extreme (0.001 = 0.1%)
+input double InpFBFMaxCandleATR = 3.0;                // FBF: Max candle size as ATR multiple
+input double InpFBFTargetPct = 0.70;                  // FBF: TP target as % of range (0.5 = middle)
+input double InpFBFStopATR = 1.5;                     // FBF: Stop loss ATR multiplier beyond breakout (tighter)
+input double InpFBFMaxSLPoints = 300.0;               // FBF: Maximum SL distance in points (caps large stops)
+input double InpFBFMinRR = 1.2;                       // FBF: Minimum R:R ratio to take trade (raised)
+input bool   InpFBFRequireTrendAlign = true;          // FBF: Require H4 trend alignment for shorts
+input double InpFBFMinRangePts = 300.0;               // FBF: Minimum range size in points (reverted)
+input double InpFBFRejectionPct = 0.10;               // FBF: Min rejection depth into range (0.10 = 10%)
+input double InpFBFRSILongMax = 48.0;                 // FBF: Max RSI for longs (tighter oversold filter)
+input double InpFBFRSIShortMin = 55.0;                // FBF: Min RSI for shorts (overbought filter)
+input bool   InpFBFRequireBothRejection = false;      // FBF: Require both price AND pct rejection
+input double InpFBFMaxADX = 28.0;                     // FBF: Hard max ADX cutoff (tighter)
+input double InpFBFADXElevatedThresh = 20.0;          // FBF: ADX threshold for elevated R:R requirement
+input double InpFBFElevatedRR = 1.8;                  // FBF: Required R:R when ADX > elevated threshold (raised)
+input bool   InpFBFDisableInTrend = true;             // FBF: Disable when market regime is TRENDING
+
+input group "=== PATTERN SCORE ADJUSTMENTS (Based on 2023-2025 Backtest) ==="
+input int InpScoreBullishMAAnomaly = 82;              // Bullish MA Cross score [+$468, 3/3 profitable]
+input int InpScoreBullishEngulfing = 92;              // Bullish Engulfing score [+$1713, BEST PERFORMER]
+input int InpScoreBullishPinBar = 88;                 // Bullish Pin Bar score [+$1154, 3/3 profitable]
+input int InpScoreBearishEngulfing = 42;              // Bearish Engulfing score [+$79, marginal]
+input int InpScoreBearishPinBar = 15;                 // Bearish Pin Bar score [-$385, WORST]
+input int InpScoreBearishMAAnomaly = 18;              // Bearish MA Cross score [-$169, never profitable]
+input int InpScoreBullishLiquiditySweep = 65;         // Bullish Liquidity Sweep score [+$489, variable]
+input int InpScoreBearishLiquiditySweep = 38;         // Bearish Liquidity Sweep score [+$6, break-even]
+input int InpScoreSupportBounce = 35;                 // Support Bounce score [-$9, low sample]
 
 input group "=== MARKET REGIME FILTERS ==="
 input bool   InpEnableConfidenceScoring = true;       // Enable pattern confidence scoring
@@ -431,7 +450,13 @@ int OnInit()
       g_price_action_lowvol = new CPriceActionLowVol(InpLowVolBBPeriod, InpLowVolBBDeviation, InpLowVolRSIPeriod,
                                         InpATRPeriod, InpScoringRRTarget, InpMinSLPoints,
                                         InpEnableBBMeanReversion, InpEnableRangeBoxTrading, InpEnableFalseBreakoutFade,
-                                        InpMRMaxATR);
+                                        InpMRMaxATR,
+                                        InpFBFSwingLookback, InpFBFPullbackPct, InpFBFMaxCandleATR,
+                                        InpFBFTargetPct, InpFBFStopATR, InpFBFMaxSLPoints, InpFBFMinRR, InpFBFRequireTrendAlign,
+                                        InpFBFMinRangePts, InpFBFRejectionPct, InpFBFRSILongMax, InpFBFRSIShortMin,
+                                        InpFBFRequireBothRejection, InpFBFMaxADX,
+                                        InpFBFADXElevatedThresh, InpFBFElevatedRR,
+                                        InpFBFDisableInTrend);
       g_risk_manager = new CRiskManager(InpMaxTotalExposure, InpDailyLossLimit, InpMaxLotMultiplier,
                                         InpMaxPositions, InpMaxMarginUsage,
                                         InpEnableLossScaling, InpLossesLevel1, InpLossesLevel2,

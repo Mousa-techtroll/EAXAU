@@ -329,6 +329,12 @@ public:
       {
          LogPrint(">>> ATR IN MEAN REVERSION RANGE (", m_mr_min_atr, "-", m_mr_max_atr, ") - Trying low vol patterns first...");
 
+         // Set H4 trend for FBF short filtering (Gold bullish bias protection)
+         m_price_action_lowvol.SetH4Trend(h4_trend);
+
+         // Set current market regime for FBF filtering (disable in trending regime)
+         m_price_action_lowvol.SetRegime(m_regime_classifier.GetRegime());
+
          if (m_price_action_lowvol.CheckAllPatterns())
          {
             signal_data = m_price_action_lowvol.GetSignal();

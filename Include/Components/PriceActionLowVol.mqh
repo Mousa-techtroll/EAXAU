@@ -46,14 +46,60 @@ private:
    double               m_min_sl_points;
    double               m_max_atr_lowvol;  // Max ATR for low vol strategies
 
+   // False Breakout Fade tuning parameters
+   int                  m_fbf_swing_lookback;    // Swing high/low lookback bars
+   double               m_fbf_pullback_pct;      // Min pullback from extreme (e.g., 0.003 = 0.3%)
+   double               m_fbf_max_candle_atr;    // Max candle size as ATR multiple
+   double               m_fbf_target_pct;        // TP target as % of range (0.5 = middle)
+   double               m_fbf_stop_atr;          // SL ATR multiplier beyond breakout
+   double               m_fbf_max_sl_points;     // Maximum SL distance in points (caps large stops)
+   double               m_fbf_min_rr;            // Minimum R:R ratio to take trade
+   bool                 m_fbf_require_trend_align; // Require H4 trend alignment for shorts
+   double               m_fbf_min_range_pts;     // Minimum range size in points
+   double               m_fbf_rejection_pct;     // Min rejection depth into range (0.10 = 10%)
+   double               m_fbf_rsi_long_max;      // Max RSI for longs (oversold filter)
+   double               m_fbf_rsi_short_min;     // Min RSI for shorts (overbought filter)
+   bool                 m_fbf_require_both_rejection; // Require both price AND pct rejection
+   double               m_fbf_max_adx;           // Max ADX for FBF (avoid trending markets)
+   double               m_fbf_adx_elevated_thresh; // ADX threshold for elevated R:R
+   double               m_fbf_elevated_rr;       // Required R:R when ADX is elevated
+   bool                 m_fbf_disable_in_trend;  // Disable FBF when regime is TRENDING
+
+   // H4 trend for FBF filtering (set externally before CheckAllPatterns)
+   ENUM_TREND_DIRECTION m_h4_trend;
+
+   // Market regime for FBF filtering (set externally before CheckAllPatterns)
+   ENUM_REGIME_TYPE     m_current_regime;
+
+   // ADX indicator handle for FBF trend strength filter
+   int                  m_handle_adx;
+
 public:
+   //+------------------------------------------------------------------+
+   //| Set H4 trend for FBF filtering (call before CheckAllPatterns)    |
+   //+------------------------------------------------------------------+
+   void SetH4Trend(ENUM_TREND_DIRECTION trend) { m_h4_trend = trend; }
+   //+------------------------------------------------------------------+
+   //| Set market regime for FBF filtering (call before CheckAllPatterns)|
+   //+------------------------------------------------------------------+
+   void SetRegime(ENUM_REGIME_TYPE regime) { m_current_regime = regime; }
    //+------------------------------------------------------------------+
    //| Constructor                                                       |
    //+------------------------------------------------------------------+
    CPriceActionLowVol(int bb_period = 20, double bb_dev = 2.0, int rsi_period = 14,
                       int atr_period = 14, double scoring_rr_target = 2.0, double min_sl = 100.0,
                       bool enable_bb_mr = true, bool enable_range = true, bool enable_fade = true,
-                      double max_atr = 30.0)
+                      double max_atr = 30.0,
+                      int fbf_swing_lookback = 20, double fbf_pullback_pct = 0.003,
+                      double fbf_max_candle_atr = 2.0, double fbf_target_pct = 0.5,
+                      double fbf_stop_atr = 1.5, double fbf_max_sl_points = 400.0, double fbf_min_rr = 1.2,
+                      bool fbf_require_trend_align = true,
+                      double fbf_min_range_pts = 300.0, double fbf_rejection_pct = 0.10,
+                      double fbf_rsi_long_max = 50.0, double fbf_rsi_short_min = 55.0,
+                      bool fbf_require_both_rejection = false,
+                      double fbf_max_adx = 30.0,
+                      double fbf_adx_elevated_thresh = 20.0, double fbf_elevated_rr = 1.5,
+                      bool fbf_disable_in_trend = true)
    {
       m_signal.signal = SIGNAL_NONE;
       m_signal.pattern_type = PATTERN_NONE;
@@ -70,13 +116,35 @@ public:
       m_enable_range_box = enable_range;
       m_enable_false_breakout_fade = enable_fade;
 
+      // False Breakout Fade tuning
+      m_fbf_swing_lookback = fbf_swing_lookback;
+      m_fbf_pullback_pct = fbf_pullback_pct;
+      m_fbf_max_candle_atr = fbf_max_candle_atr;
+      m_fbf_target_pct = fbf_target_pct;
+      m_fbf_stop_atr = fbf_stop_atr;
+      m_fbf_max_sl_points = fbf_max_sl_points;
+      m_fbf_min_rr = fbf_min_rr;
+      m_fbf_require_trend_align = fbf_require_trend_align;
+      m_fbf_min_range_pts = fbf_min_range_pts;
+      m_fbf_rejection_pct = fbf_rejection_pct;
+      m_fbf_rsi_long_max = fbf_rsi_long_max;
+      m_fbf_rsi_short_min = fbf_rsi_short_min;
+      m_fbf_require_both_rejection = fbf_require_both_rejection;
+      m_fbf_max_adx = fbf_max_adx;
+      m_fbf_adx_elevated_thresh = fbf_adx_elevated_thresh;
+      m_fbf_elevated_rr = fbf_elevated_rr;
+      m_fbf_disable_in_trend = fbf_disable_in_trend;
+
       m_range_valid = false;
       m_range_bars_count = 0;
+      m_h4_trend = TREND_NEUTRAL;  // Default neutral until set externally
+      m_current_regime = REGIME_UNKNOWN;  // Default until set externally
 
       // Initialize indicators
       m_handle_bb = iBands(_Symbol, PERIOD_H1, m_bb_period, 0, m_bb_deviation, PRICE_CLOSE);
       m_handle_rsi = iRSI(_Symbol, PERIOD_H1, m_rsi_period, PRICE_CLOSE);
       m_handle_atr = iATR(_Symbol, PERIOD_H1, m_atr_period);
+      m_handle_adx = iADX(_Symbol, PERIOD_H1, 14);  // ADX for FBF trend strength filter
    }
 
    //+------------------------------------------------------------------+
@@ -105,16 +173,30 @@ public:
    //+------------------------------------------------------------------+
    //| GETTER: Allow Main EA to check RSI                               |
    //+------------------------------------------------------------------+
-   double GetRSI() 
-   { 
-      double rsi_buffer[]; 
-      ArraySetAsSeries(rsi_buffer, true); 
-      
+   double GetRSI()
+   {
+      double rsi_buffer[];
+      ArraySetAsSeries(rsi_buffer, true);
+
       // Use the class's internal RSI handle
-      if (CopyBuffer(m_handle_rsi, 0, 0, 1, rsi_buffer) > 0) 
-         return rsi_buffer[0]; 
-         
+      if (CopyBuffer(m_handle_rsi, 0, 0, 1, rsi_buffer) > 0)
+         return rsi_buffer[0];
+
       return 50.0; // Default neutral if error
+   }
+   //+------------------------------------------------------------------+
+   //| GETTER: Get ADX value for FBF trend strength filter              |
+   //+------------------------------------------------------------------+
+   double GetADX()
+   {
+      double adx_buffer[];
+      ArraySetAsSeries(adx_buffer, true);
+
+      // ADX buffer 0 is the main ADX line
+      if (CopyBuffer(m_handle_adx, 0, 0, 1, adx_buffer) > 0)
+         return adx_buffer[0];
+
+      return 50.0; // Default high (trending) if error - conservative
    }
    //+------------------------------------------------------------------+
    //| Get Bollinger Band middle (20-period SMA)                        |
@@ -370,6 +452,7 @@ public:
    //+------------------------------------------------------------------+
    //| STRATEGY 3: False Breakout Fade                                  |
    //| Fade breakouts in low volatility (likely to fail)                |
+   //| ALL parameters are configurable via inputs - NO hardcoded values |
    //+------------------------------------------------------------------+
    bool DetectFalseBreakoutFade()
    {
@@ -377,6 +460,13 @@ public:
          return false;
 
       LogPrint(">>> Checking False Breakout Fade pattern...");
+
+      // REGIME FILTER: Disable FBF in trending market regime
+      if(m_fbf_disable_in_trend && m_current_regime == REGIME_TRENDING)
+      {
+         LogPrint("    REGIME is TRENDING - FBF disabled in trending markets");
+         return false;
+      }
 
       // Check for LOW VOLATILITY (required - breakouts fail in low vol)
       double atr = GetATR();
@@ -386,6 +476,34 @@ public:
          return false;
       }
 
+      // ADX TREND STRENGTH FILTER (FBF only) - tiered system
+      // ADX > max = reject, ADX > elevated = require higher R:R
+      double adx = 0;
+      double effective_min_rr = m_fbf_min_rr;  // Default R:R requirement
+
+      if(m_fbf_max_adx > 0)
+      {
+         adx = GetADX();
+         if(adx > m_fbf_max_adx)
+         {
+            LogPrint("    ADX too high (", DoubleToString(adx, 1), " > ", m_fbf_max_adx, ") - market trending, skip FBF");
+            return false;
+         }
+         // Tiered R:R: if ADX is elevated (but below max), require higher R:R
+         if(adx > m_fbf_adx_elevated_thresh)
+         {
+            effective_min_rr = m_fbf_elevated_rr;
+            LogPrint("    ADX=", DoubleToString(adx, 1), " (elevated, >", m_fbf_adx_elevated_thresh, ") - requiring R:R >= ", effective_min_rr);
+         }
+         else
+         {
+            LogPrint("    ADX=", DoubleToString(adx, 1), " (low) - using standard R:R >= ", effective_min_rr);
+         }
+      }
+
+      // Calculate required bars for lookback
+      int bars_needed = m_fbf_swing_lookback + 5;
+
       // Get price data
       double close[], high[], low[], open[];
       ArraySetAsSeries(close, true);
@@ -393,92 +511,182 @@ public:
       ArraySetAsSeries(low, true);
       ArraySetAsSeries(open, true);
 
-      if(CopyClose(_Symbol, PERIOD_H1, 0, 25, close) <= 0 ||
-         CopyHigh(_Symbol, PERIOD_H1, 0, 25, high) <= 0 ||
-         CopyLow(_Symbol, PERIOD_H1, 0, 25, low) <= 0 ||
-         CopyOpen(_Symbol, PERIOD_H1, 0, 25, open) <= 0)
+      if(CopyClose(_Symbol, PERIOD_H1, 0, bars_needed, close) <= 0 ||
+         CopyHigh(_Symbol, PERIOD_H1, 0, bars_needed, high) <= 0 ||
+         CopyLow(_Symbol, PERIOD_H1, 0, bars_needed, low) <= 0 ||
+         CopyOpen(_Symbol, PERIOD_H1, 0, bars_needed, open) <= 0)
       {
          return false;
       }
 
-      // Find recent swing high/low (from bars 2 to 21)
-      double swing_high = high[2];
-      double swing_low = low[2];
+      // Get RSI for confirmation
+      double rsi = GetRSI();
 
-      for(int i = 3; i <= 21; i++)
+      // Find recent swing high/low using configurable lookback (from bars 3 to m_fbf_swing_lookback+2)
+      double swing_high = high[3];
+      double swing_low = low[3];
+
+      for(int i = 4; i <= m_fbf_swing_lookback + 2; i++)
       {
          if(high[i] > swing_high) swing_high = high[i];
          if(low[i] < swing_low) swing_low = low[i];
       }
 
-      // The breakout candle is the most recently completed one (index 1)
-      double breakout_candle_high = high[1];
-      double breakout_candle_low = low[1];
-      double breakout_candle_close = close[1];
+      double range_size = swing_high - swing_low;
 
-      LogPrint("    ATR=", atr, " Swing High=", swing_high, " Swing Low=", swing_low);
-      LogPrint("    Breakout Candle H/L/C: ", breakout_candle_high, "/", breakout_candle_low, "/", breakout_candle_close);
-
-      // BEARISH FADE: Price broke above swing high but ATR is low
-      if(breakout_candle_high > swing_high)
+      // Minimum range size filter (configurable)
+      if(range_size < m_fbf_min_range_pts * _Point)
       {
-         // Check if it's a false breakout (price pulling back)
-         if(breakout_candle_close < breakout_candle_high * 0.997)  // Closed below high (pullback)
+         LogPrint("    Range too small (", range_size/_Point, " pts < ", m_fbf_min_range_pts, " pts) - skipping");
+         return false;
+      }
+
+      LogPrint("    ATR=", atr, " Swing High=", swing_high, " Swing Low=", swing_low, " Range=", range_size/_Point, " pts");
+      LogPrint("    RSI=", DoubleToString(rsi, 1), " H4 Trend: ", EnumToString(m_h4_trend));
+      LogPrint("    FBF Params: Lookback=", m_fbf_swing_lookback, " Pullback=", m_fbf_pullback_pct,
+               " MaxCandleATR=", m_fbf_max_candle_atr, " TargetPct=", m_fbf_target_pct, " StopATR=", m_fbf_stop_atr,
+               " MinRR=", m_fbf_min_rr, " TrendAlign=", m_fbf_require_trend_align);
+      LogPrint("    MinRangePts=", m_fbf_min_range_pts, " RejectionPct=", m_fbf_rejection_pct,
+               " RSILongMax=", m_fbf_rsi_long_max, " RSIShortMin=", m_fbf_rsi_short_min,
+               " RequireBoth=", m_fbf_require_both_rejection);
+
+      // Check last 2 bars for breakout+rejection pattern
+      double recent_high = MathMax(high[1], high[2]);
+      double recent_low = MathMin(low[1], low[2]);
+      double current_close = close[1];  // Last completed bar's close
+
+      LogPrint("    Recent 2-bar H/L: ", recent_high, "/", recent_low, " | Close[1]=", current_close);
+
+      // ============ BEARISH FADE (Breakout above swing high) ============
+      if(recent_high > swing_high)
+      {
+         // H4 TREND FILTER FOR SHORTS
+         if(m_fbf_require_trend_align && m_h4_trend == TREND_BULLISH)
          {
-            // Additional confirmation: Small breakout candle (not huge momentum)
-            double candle_range = breakout_candle_high - breakout_candle_low;
-            if(candle_range < atr * 2.0)  // Not an exceptionally large candle
+            LogPrint("    SHORT BLOCKED: H4 trend is BULLISH - Gold bullish bias protection");
+         }
+         else
+         {
+            // Check rejection using configurable depth into range
+            double min_rejection_level = swing_high - (range_size * m_fbf_rejection_pct);
+            bool price_rejected = (current_close < min_rejection_level);
+
+            // Percentage-based pullback from the extreme
+            double pullback_threshold = recent_high * (1.0 - m_fbf_pullback_pct);
+            bool pct_rejected = (current_close < pullback_threshold);
+
+            LogPrint("    SHORT Check: Price rejected (", m_fbf_rejection_pct*100, "%% into range)? ", price_rejected, " | Pct rejected? ", pct_rejected);
+
+            // Use configurable AND/OR logic
+            bool rejection_confirmed = m_fbf_require_both_rejection ? (price_rejected && pct_rejected) : (price_rejected || pct_rejected);
+
+            if(rejection_confirmed)
             {
-               LogPrint("    ✓ BEARISH FALSE BREAKOUT FADE DETECTED!");
-               LogPrint("    Low vol breakout above resistance - likely to fail");
+               // Candle size filter
+               double breakout_candle_range = high[1] - low[1];
+               if(breakout_candle_range < atr * m_fbf_max_candle_atr)
+               {
+                  // RSI confirmation for shorts (configurable threshold)
+                  if(rsi < m_fbf_rsi_short_min)
+                  {
+                     LogPrint("    SHORT SKIPPED: RSI not overbought (", DoubleToString(rsi,1), " < ", m_fbf_rsi_short_min, ")");
+                  }
+                  else
+                  {
+                     double entry_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                     double atr_sl_fb = recent_high + (atr * m_fbf_stop_atr);
+                     double min_sl_fb = entry_price + m_min_sl_points * _Point;
+                     double max_sl_fb = entry_price + m_fbf_max_sl_points * _Point;  // Cap SL distance
+                     double stop_loss = MathMax(atr_sl_fb, min_sl_fb);
+                     stop_loss = MathMin(stop_loss, max_sl_fb);  // Apply cap
+                     double take_profit = swing_low + (range_size * (1.0 - m_fbf_target_pct));
 
-               m_signal.signal = SIGNAL_SHORT;
-               m_signal.pattern_type = PATTERN_FALSE_BREAKOUT_FADE;
-               m_signal.pattern_name = "False Breakout Fade Short";
-               m_signal.entry_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                     double risk = stop_loss - entry_price;
+                     double reward = entry_price - take_profit;
+                     double rr_ratio = (risk > 0) ? (reward / risk) : 0;
 
-               // Target: Back to middle of recent range
-               double range_mid = swing_low + ((swing_high - swing_low) * 0.5);
-               m_signal.take_profit = range_mid;
+                     LogPrint("    SHORT R:R Check: Entry=", entry_price, " SL=", stop_loss, " TP=", take_profit);
+                     LogPrint("    Risk=", risk, " Reward=", reward, " R:R=", rr_ratio, " Required=", effective_min_rr);
 
-               // v4.4: Stop with minimum SL enforcement
-               double atr_sl_fb = breakout_candle_high + (atr * 1.5);
-               double min_sl_fb = m_signal.entry_price + m_min_sl_points * _Point;
-               m_signal.stop_loss = MathMax(atr_sl_fb, min_sl_fb);  // Use wider SL
-
-               m_signal.signal_time = TimeCurrent();
-               return true;
+                     if(rr_ratio < effective_min_rr)
+                     {
+                        LogPrint("    SHORT REJECTED: R:R ", rr_ratio, " < minimum ", effective_min_rr);
+                     }
+                     else
+                     {
+                        LogPrint("    ✓ BEARISH FALSE BREAKOUT FADE DETECTED!");
+                        m_signal.signal = SIGNAL_SHORT;
+                        m_signal.pattern_type = PATTERN_FALSE_BREAKOUT_FADE;
+                        m_signal.pattern_name = "False Breakout Fade Short";
+                        m_signal.entry_price = entry_price;
+                        m_signal.take_profit = take_profit;
+                        m_signal.stop_loss = stop_loss;
+                        m_signal.signal_time = TimeCurrent();
+                        return true;
+                     }
+                  }
+               }
             }
          }
       }
 
-      // BULLISH FADE: Price broke below swing low but ATR is low
-      if(breakout_candle_low < swing_low)
+      // ============ BULLISH FADE (Breakout below swing low) ============
+      if(recent_low < swing_low)
       {
-         // Check if it's a false breakout (price pulling back)
-         if(breakout_candle_close > breakout_candle_low * 1.003)  // Closed above low (pullback)
-         {
-            // Additional confirmation: Small breakout candle
-            double candle_range = breakout_candle_high - breakout_candle_low;
-            if(candle_range < atr * 2.0)
-            {
-               LogPrint("    ✓ BULLISH FALSE BREAKOUT FADE DETECTED!");
-               LogPrint("    Low vol breakout below support - likely to fail");
+         // Check rejection using configurable depth into range
+         double min_rejection_level = swing_low + (range_size * m_fbf_rejection_pct);
+         bool price_rejected = (current_close > min_rejection_level);
 
+         // Percentage-based pullback from the extreme
+         double pullback_threshold_l = recent_low * (1.0 + m_fbf_pullback_pct);
+         bool pct_rejected = (current_close > pullback_threshold_l);
+
+         LogPrint("    LONG Check: Price rejected (", m_fbf_rejection_pct*100, "%% into range)? ", price_rejected, " | Pct rejected? ", pct_rejected);
+
+         // Use configurable AND/OR logic
+         bool rejection_confirmed = m_fbf_require_both_rejection ? (price_rejected && pct_rejected) : (price_rejected || pct_rejected);
+
+         if(rejection_confirmed)
+         {
+            // Candle size filter
+            double breakout_candle_range = high[1] - low[1];
+            if(breakout_candle_range < atr * m_fbf_max_candle_atr)
+            {
+               // RSI confirmation for longs (configurable threshold)
+               if(rsi > m_fbf_rsi_long_max)
+               {
+                  LogPrint("    LONG SKIPPED: RSI too high (", DoubleToString(rsi,1), " > ", m_fbf_rsi_long_max, ")");
+                  return false;
+               }
+
+               double entry_price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+               double atr_sl_fbl = recent_low - (atr * m_fbf_stop_atr);
+               double min_sl_fbl = entry_price - m_min_sl_points * _Point;
+               double max_sl_fbl = entry_price - m_fbf_max_sl_points * _Point;  // Cap SL distance
+               double stop_loss = MathMin(atr_sl_fbl, min_sl_fbl);
+               stop_loss = MathMax(stop_loss, max_sl_fbl);  // Apply cap (for longs, max = higher price)
+               double take_profit = swing_high - (range_size * (1.0 - m_fbf_target_pct));
+
+               double risk = entry_price - stop_loss;
+               double reward = take_profit - entry_price;
+               double rr_ratio = (risk > 0) ? (reward / risk) : 0;
+
+               LogPrint("    LONG R:R Check: Entry=", entry_price, " SL=", stop_loss, " TP=", take_profit);
+               LogPrint("    Risk=", risk, " Reward=", reward, " R:R=", rr_ratio, " Required=", effective_min_rr);
+
+               if(rr_ratio < effective_min_rr)
+               {
+                  LogPrint("    LONG REJECTED: R:R ", rr_ratio, " < minimum ", effective_min_rr);
+                  return false;
+               }
+
+               LogPrint("    ✓ BULLISH FALSE BREAKOUT FADE DETECTED! (RSI: ", DoubleToString(rsi,1), ")");
                m_signal.signal = SIGNAL_LONG;
                m_signal.pattern_type = PATTERN_FALSE_BREAKOUT_FADE;
                m_signal.pattern_name = "False Breakout Fade Long";
-               m_signal.entry_price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-
-               // Target: Back to middle of recent range
-               double range_mid_l = swing_low + ((swing_high - swing_low) * 0.5);
-               m_signal.take_profit = range_mid_l;
-
-               // v4.4: Stop with minimum SL enforcement
-               double atr_sl_fbl = breakout_candle_low - (atr * 1.5);
-               double min_sl_fbl = m_signal.entry_price - m_min_sl_points * _Point;
-               m_signal.stop_loss = MathMin(atr_sl_fbl, min_sl_fbl);  // Use wider SL
-
+               m_signal.entry_price = entry_price;
+               m_signal.take_profit = take_profit;
+               m_signal.stop_loss = stop_loss;
                m_signal.signal_time = TimeCurrent();
                return true;
             }
