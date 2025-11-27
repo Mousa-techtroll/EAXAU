@@ -28,7 +28,8 @@ private:
 
    // ATR configuration for stop loss
    int                  m_atr_period_sl;
-   double               m_atr_multiplier_sl;
+   double               m_atr_multiplier_sl;        // Base ATR multiplier from config
+   double               m_atr_multiplier_sl_adj;    // Volatility-adjusted ATR multiplier
    double               m_min_sl_points;
    double               m_scoring_rr_target;
 
@@ -71,6 +72,7 @@ public:
       m_signal.pattern_type = PATTERN_NONE;
       m_atr_period_sl = atr_period;
       m_atr_multiplier_sl = atr_mult;
+      m_atr_multiplier_sl_adj = atr_mult;  // Initialize adjusted to base
       m_min_sl_points = min_sl;
       m_scoring_rr_target = scoring_rr_target;
       m_rsi_period = rsi_period;
@@ -182,7 +184,8 @@ bool DetectMACross(ENUM_TREND_DIRECTION trend_bias)
          if(CopyBuffer(m_handle_atr_sl, 0, 0, 1, atr) > 0)
          {
             // Use 0.67x multiplier for MA Cross (2x ATR if base is 3x)
-            double ma_cross_multiplier = m_atr_multiplier_sl * 0.67;
+            // m_atr_multiplier_sl_adj may be tightened in high volatility
+            double ma_cross_multiplier = m_atr_multiplier_sl_adj * 0.67;
             double stop_buffer = MathMax(atr[0] * ma_cross_multiplier, m_min_sl_points * _Point);
             m_signal.stop_loss = m_signal.entry_price - stop_buffer;  // Use entry price, not slow MA
          }
@@ -229,7 +232,8 @@ bool DetectMACross(ENUM_TREND_DIRECTION trend_bias)
          if(CopyBuffer(m_handle_atr_sl, 0, 0, 1, atr_short) > 0)
          {
             // Use 0.67x multiplier for MA Cross (2x ATR if base is 3x)
-            double ma_cross_multiplier = m_atr_multiplier_sl * 0.67;
+            // m_atr_multiplier_sl_adj may be tightened in high volatility
+            double ma_cross_multiplier = m_atr_multiplier_sl_adj * 0.67;
             double stop_buffer = MathMax(atr_short[0] * ma_cross_multiplier, m_min_sl_points * _Point);
             m_signal.stop_loss = m_signal.entry_price + stop_buffer;  // Use entry price, not slow MA
          }
@@ -394,6 +398,28 @@ void Update(ENUM_TREND_DIRECTION trend_bias, ENUM_REGIME_TYPE regime)
    double GetStopLoss() const { return m_signal.stop_loss; }
    double GetTakeProfit() const { return m_signal.take_profit; }
    ENUM_PATTERN_TYPE GetPatternType() const { return m_signal.pattern_type; }
+
+   //+------------------------------------------------------------------+
+   //| Set volatility-adjusted SL multiplier                             |
+   //| Called before pattern detection to tighten stops in high vol      |
+   //+------------------------------------------------------------------+
+   void SetVolatilityAdjustedSLMult(double sl_mult_adjustment)
+   {
+      // Apply adjustment to base ATR multiplier (sl_mult_adjustment is typically 0.7-1.0)
+      m_atr_multiplier_sl_adj = m_atr_multiplier_sl * sl_mult_adjustment;
+
+      // Ensure minimum reasonable multiplier
+      if(m_atr_multiplier_sl_adj < 1.0)
+         m_atr_multiplier_sl_adj = 1.0;
+   }
+
+   //+------------------------------------------------------------------+
+   //| Reset SL multiplier to base value                                 |
+   //+------------------------------------------------------------------+
+   void ResetSLMultiplier()
+   {
+      m_atr_multiplier_sl_adj = m_atr_multiplier_sl;
+   }
 
 private:
    //+------------------------------------------------------------------+

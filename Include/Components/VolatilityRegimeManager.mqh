@@ -47,6 +47,12 @@ struct SVolatilityRegimeConfig
    // Volatility contraction bonus
    double   contraction_threshold;   // % decrease to detect contraction (default 0.7)
    double   contraction_risk_boost;  // Risk boost during contraction (default 1.1)
+
+   // Stop loss tightening in high volatility
+   bool     enable_sl_adjust;        // Enable SL tightening (default true)
+   double   high_vol_sl_mult;        // SL multiplier in high vol (default 0.85)
+   double   extreme_vol_sl_mult;     // SL multiplier in extreme vol (default 0.70)
+   double   expansion_sl_mult;       // SL multiplier when vol expanding (default 0.75)
 };
 
 //+------------------------------------------------------------------+
@@ -59,6 +65,7 @@ struct SVolatilityAnalysis
    double   average_atr;
    double   atr_ratio;              // current / average
    double   risk_multiplier;        // Final multiplier to apply
+   double   sl_multiplier;          // Stop loss ATR multiplier adjustment
    bool     is_expanding;           // Volatility rapidly expanding
    bool     is_contracting;         // Volatility contracting (good for entries)
    string   regime_description;
@@ -118,6 +125,12 @@ public:
       m_config.contraction_threshold = 0.7;
       m_config.contraction_risk_boost = 1.1;
 
+      // Stop loss tightening defaults
+      m_config.enable_sl_adjust = true;
+      m_config.high_vol_sl_mult = 0.85;
+      m_config.extreme_vol_sl_mult = 0.70;
+      m_config.expansion_sl_mult = 0.75;
+
       ArrayResize(m_atr_history, m_history_size);
       ArrayInitialize(m_atr_history, 0);
    }
@@ -137,7 +150,8 @@ public:
    //+------------------------------------------------------------------+
    void Configure(double very_low_thresh, double low_thresh, double normal_thresh, double high_thresh,
                   double very_low_risk, double low_risk, double normal_risk, double high_risk, double extreme_risk,
-                  double expansion_thresh, double expansion_cut, double contraction_thresh, double contraction_boost)
+                  double expansion_thresh, double expansion_cut, double contraction_thresh, double contraction_boost,
+                  bool enable_sl_adjust = true, double high_sl_mult = 0.85, double extreme_sl_mult = 0.70, double expansion_sl_mult = 0.75)
    {
       m_config.very_low_threshold = very_low_thresh;
       m_config.low_threshold = low_thresh;
@@ -154,6 +168,12 @@ public:
       m_config.expansion_risk_cut = expansion_cut;
       m_config.contraction_threshold = contraction_thresh;
       m_config.contraction_risk_boost = contraction_boost;
+
+      // Stop loss tightening config
+      m_config.enable_sl_adjust = enable_sl_adjust;
+      m_config.high_vol_sl_mult = high_sl_mult;
+      m_config.extreme_vol_sl_mult = extreme_sl_mult;
+      m_config.expansion_sl_mult = expansion_sl_mult;
    }
 
    //+------------------------------------------------------------------+
@@ -325,6 +345,43 @@ public:
       return m_current_analysis.atr_ratio;
    }
 
+   //+------------------------------------------------------------------+
+   //| Get stop loss multiplier for current volatility regime            |
+   //| Returns < 1.0 in high vol to tighten stops                        |
+   //+------------------------------------------------------------------+
+   double GetSLMultiplier()
+   {
+      if(!m_enabled || !m_config.enable_sl_adjust) return 1.0;
+
+      Update();
+      return m_current_analysis.sl_multiplier;
+   }
+
+   //+------------------------------------------------------------------+
+   //| Apply volatility-based SL adjustment to ATR multiplier            |
+   //+------------------------------------------------------------------+
+   double AdjustSLForVolatility(double base_atr_mult)
+   {
+      if(!m_enabled || !m_config.enable_sl_adjust) return base_atr_mult;
+
+      Update();
+
+      double adjusted = base_atr_mult * m_current_analysis.sl_multiplier;
+
+      // Log significant adjustments
+      if(MathAbs(m_current_analysis.sl_multiplier - 1.0) > 0.05)
+      {
+         LogPrint("VolatilityRegime SL Adjustment:");
+         LogPrint("  Regime: ", m_current_analysis.regime_description);
+         LogPrint("  ATR Ratio: ", DoubleToString(m_current_analysis.atr_ratio, 2));
+         LogPrint("  SL ATR Mult: ", DoubleToString(base_atr_mult, 2), " -> ",
+                  DoubleToString(adjusted, 2), " (x",
+                  DoubleToString(m_current_analysis.sl_multiplier, 2), ")");
+      }
+
+      return adjusted;
+   }
+
 private:
    //+------------------------------------------------------------------+
    //| Update ATR history for average calculation                        |
@@ -453,5 +510,51 @@ private:
 
       // Clamp final multiplier to reasonable bounds
       m_current_analysis.risk_multiplier = MathMax(0.3, MathMin(1.5, base_mult));
+
+      // Also calculate SL multiplier
+      CalculateSLMultiplier();
+   }
+
+   //+------------------------------------------------------------------+
+   //| Calculate stop loss multiplier for high volatility tightening     |
+   //+------------------------------------------------------------------+
+   void CalculateSLMultiplier()
+   {
+      // Default: no adjustment
+      double sl_mult = 1.0;
+
+      if(!m_config.enable_sl_adjust)
+      {
+         m_current_analysis.sl_multiplier = 1.0;
+         return;
+      }
+
+      // Tighten stops in high/extreme volatility
+      switch(m_current_analysis.regime)
+      {
+         case VOL_REGIME_VERY_LOW:
+         case VOL_REGIME_LOW:
+         case VOL_REGIME_NORMAL:
+            // Normal SL in low/normal volatility
+            sl_mult = 1.0;
+            break;
+         case VOL_REGIME_HIGH:
+            // Tighter stops in high volatility
+            sl_mult = m_config.high_vol_sl_mult;
+            break;
+         case VOL_REGIME_EXTREME:
+            // Much tighter stops in extreme volatility
+            sl_mult = m_config.extreme_vol_sl_mult;
+            break;
+      }
+
+      // Additional tightening if volatility is rapidly expanding
+      if(m_current_analysis.is_expanding)
+      {
+         sl_mult = MathMin(sl_mult, m_config.expansion_sl_mult);
+      }
+
+      // Clamp to reasonable bounds (50% to 100% of normal SL)
+      m_current_analysis.sl_multiplier = MathMax(0.5, MathMin(1.0, sl_mult));
    }
 };

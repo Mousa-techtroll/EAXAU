@@ -19,6 +19,7 @@
 #include "../Filters/MarketFilters.mqh"
 #include "../Components/MomentumFilter.mqh"
 #include "../Components/VolatilityBreakout.mqh"
+#include "../Components/VolatilityRegimeManager.mqh"
 #include "RiskMonitor.mqh"
 #include "TradeOrchestrator.mqh"
 
@@ -42,6 +43,7 @@ private:
    CTradeOrchestrator*   m_trade_orchestrator;
    CMomentumFilter*      m_momentum_filter;
    CVolatilityBreakout*  m_vol_breakout;
+   CVolatilityRegimeManager* m_volatility_regime;
 
    int                   m_handle_ma_200;
    int                   m_handle_adx_h1;
@@ -218,6 +220,9 @@ public:
       m_breakout_enabled = false;
       m_bo_tp1_mult = 2.5;
       m_bo_tp2_mult = 4.0;
+
+      // Default volatility regime to NULL
+      m_volatility_regime = NULL;
    }
 
    //+------------------------------------------------------------------+
@@ -244,6 +249,17 @@ public:
 
       if(m_breakout_enabled)
          LogPrint("SignalProcessor: Volatility Breakout ENABLED (TP1 ", tp1_mult, "x, TP2 ", tp2_mult, "x)");
+   }
+
+   //+------------------------------------------------------------------+
+   //| Configure volatility regime manager for SL tightening             |
+   //+------------------------------------------------------------------+
+   void ConfigureVolatilityRegime(CVolatilityRegimeManager* vol_regime)
+   {
+      m_volatility_regime = vol_regime;
+
+      if(m_volatility_regime != NULL)
+         LogPrint("SignalProcessor: Volatility Regime SL Adjustment ENABLED");
    }
 
    //+------------------------------------------------------------------+
@@ -278,6 +294,17 @@ public:
       ENUM_REGIME_TYPE regime = m_regime_classifier.GetRegime();
       int macro_score = m_macro_bias.GetBiasScore();
       double current_adx = m_regime_classifier.GetADX();
+
+      // Apply volatility-based SL adjustment BEFORE pattern detection
+      // This tightens stops in high volatility to reduce drawdown
+      if(m_volatility_regime != NULL)
+      {
+         double sl_mult = m_volatility_regime.GetSLMultiplier();
+         if(m_price_action != NULL)
+            m_price_action.SetVolatilityAdjustedSLMult(sl_mult);
+         if(m_price_action_lowvol != NULL)
+            m_price_action_lowvol.SetVolatilityAdjustedSLMult(sl_mult);
+      }
 
       // Check for signals (prioritize low vol patterns in low vol environments)
       SPriceActionData signal_data;

@@ -74,6 +74,9 @@ private:
    // ADX indicator handle for FBF trend strength filter
    int                  m_handle_adx;
 
+   // Volatility-adjusted SL multiplier (set externally based on vol regime)
+   double               m_vol_sl_adjustment;      // 1.0 = normal, <1.0 = tighter stops in high vol
+
 public:
    //+------------------------------------------------------------------+
    //| Set H4 trend for FBF filtering (call before CheckAllPatterns)    |
@@ -83,6 +86,14 @@ public:
    //| Set market regime for FBF filtering (call before CheckAllPatterns)|
    //+------------------------------------------------------------------+
    void SetRegime(ENUM_REGIME_TYPE regime) { m_current_regime = regime; }
+   //+------------------------------------------------------------------+
+   //| Set volatility-adjusted SL multiplier (call before CheckAllPatterns)|
+   //| sl_mult_adjustment: 1.0 = normal, <1.0 = tighter stops in high vol |
+   //+------------------------------------------------------------------+
+   void SetVolatilityAdjustedSLMult(double sl_mult_adjustment)
+   {
+      m_vol_sl_adjustment = MathMax(0.5, MathMin(1.0, sl_mult_adjustment));
+   }
    //+------------------------------------------------------------------+
    //| Constructor                                                       |
    //+------------------------------------------------------------------+
@@ -139,6 +150,7 @@ public:
       m_range_bars_count = 0;
       m_h4_trend = TREND_NEUTRAL;  // Default neutral until set externally
       m_current_regime = REGIME_UNKNOWN;  // Default until set externally
+      m_vol_sl_adjustment = 1.0;  // Default to normal (no tightening)
 
       // Initialize indicators
       m_handle_bb = iBands(_Symbol, PERIOD_H1, m_bb_period, 0, m_bb_deviation, PRICE_CLOSE);
@@ -594,7 +606,9 @@ public:
                   else
                   {
                      double entry_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                     double atr_sl_fb = recent_high + (atr * m_fbf_stop_atr);
+                     // Apply volatility-based SL tightening (m_vol_sl_adjustment is <1.0 in high vol)
+                     double adjusted_stop_atr = m_fbf_stop_atr * m_vol_sl_adjustment;
+                     double atr_sl_fb = recent_high + (atr * adjusted_stop_atr);
                      double min_sl_fb = entry_price + m_min_sl_points * _Point;
                      double max_sl_fb = entry_price + m_fbf_max_sl_points * _Point;  // Cap SL distance
                      double stop_loss = MathMax(atr_sl_fb, min_sl_fb);
@@ -660,7 +674,9 @@ public:
                }
 
                double entry_price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-               double atr_sl_fbl = recent_low - (atr * m_fbf_stop_atr);
+               // Apply volatility-based SL tightening (m_vol_sl_adjustment is <1.0 in high vol)
+               double adjusted_stop_atr = m_fbf_stop_atr * m_vol_sl_adjustment;
+               double atr_sl_fbl = recent_low - (atr * adjusted_stop_atr);
                double min_sl_fbl = entry_price - m_min_sl_points * _Point;
                double max_sl_fbl = entry_price - m_fbf_max_sl_points * _Point;  // Cap SL distance
                double stop_loss = MathMin(atr_sl_fbl, min_sl_fbl);

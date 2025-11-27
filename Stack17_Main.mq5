@@ -199,12 +199,18 @@ input double InpVolHighThresh = 1.3;                  // High Vol Threshold (ATR
 input double InpVolVeryLowRisk = 0.85;                // Very Low Vol: Risk multiplier (was 0.7, less aggressive)
 input double InpVolLowRisk = 0.92;                    // Low Vol: Risk multiplier (was 0.85)
 input double InpVolNormalRisk = 1.0;                  // Normal Vol: Risk multiplier
-input double InpVolHighRisk = 1.0;                    // High Vol: Risk multiplier
-input double InpVolExtremeRisk = 0.75;                // Extreme Vol: Risk multiplier (was 0.6, less aggressive)
+input double InpVolHighRisk = 0.85;                   // High Vol: Risk multiplier (reduced from 1.0 - tighter risk)
+input double InpVolExtremeRisk = 0.65;                // Extreme Vol: Risk multiplier (reduced from 0.75 - much tighter)
 input double InpVolExpansionThresh = 1.5;             // Expansion Detection: ATR change ratio
-input double InpVolExpansionCut = 0.8;                // Expansion: Risk cut when vol spiking (was 0.7)
+input double InpVolExpansionCut = 0.7;                // Expansion: Risk cut when vol spiking (tighter from 0.8)
 input double InpVolContractionThresh = 0.7;           // Contraction Detection: ATR change ratio
 input double InpVolContractionBoost = 1.1;            // Contraction: Risk boost when vol settling
+
+input group "=== VOLATILITY-BASED STOP LOSS TIGHTENING ==="
+input bool   InpEnableVolSLAdjust = true;             // Enable tighter stops in high volatility
+input double InpVolHighSLMult = 0.85;                 // High Vol: SL ATR multiplier (tighter stops)
+input double InpVolExtremeSLMult = 0.70;              // Extreme Vol: SL ATR multiplier (much tighter)
+input double InpVolExpansionSLMult = 0.75;            // Volatility Expansion: SL multiplier (quick tightening)
 
 input group "=== MACRO BIAS ==="
 input string InpDXYSymbol = "USDX";                    // DXY symbol name
@@ -528,7 +534,8 @@ int OnInit()
             g_volatility_regime.Configure(
                   InpVolVeryLowThresh, InpVolLowThresh, InpVolNormalThresh, InpVolHighThresh,
                   InpVolVeryLowRisk, InpVolLowRisk, InpVolNormalRisk, InpVolHighRisk, InpVolExtremeRisk,
-                  InpVolExpansionThresh, InpVolExpansionCut, InpVolContractionThresh, InpVolContractionBoost
+                  InpVolExpansionThresh, InpVolExpansionCut, InpVolContractionThresh, InpVolContractionBoost,
+                  InpEnableVolSLAdjust, InpVolHighSLMult, InpVolExtremeSLMult, InpVolExpansionSLMult
             );
       }
 
@@ -758,6 +765,12 @@ int OnInit()
             InpBOTp1Distance,
             InpBOTp2Distance
       );
+
+      // Configure Volatility Regime for SL tightening in high volatility
+      if(InpEnableVolSLAdjust && g_volatility_regime != NULL)
+      {
+            g_signal_processor.ConfigureVolatilityRegime(g_volatility_regime);
+      }
 
       LogPrint("Core orchestration classes initialized");
 
